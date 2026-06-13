@@ -294,7 +294,33 @@ async def main():
     async with app:
         await app.start()
         await app.updater.start_polling()
+        await _broadcast_startup(app.bot)
         await asyncio.Event().wait()
+
+
+async def _broadcast_startup(bot):
+    vlad_id = get_vlad_id()
+    victoria_id = get_victoria_id()
+    if vlad_id:
+        try:
+            await bot.send_message(
+                chat_id=vlad_id,
+                text="👋 *VB Assistant на связи!*" + VLAD_HELP,
+                parse_mode="Markdown",
+                reply_markup=VLAD_KEYBOARD
+            )
+        except Exception as e:
+            logger.error(f"Broadcast to Vlad failed: {e}")
+    if victoria_id:
+        try:
+            await bot.send_message(
+                chat_id=victoria_id,
+                text="👋 *VB Assistant на связи!*" + VICTORIA_HELP,
+                parse_mode="Markdown",
+                reply_markup=VICTORIA_KEYBOARD
+            )
+        except Exception as e:
+            logger.error(f"Broadcast to Victoria failed: {e}")
 
 
 if __name__ == "__main__":
