@@ -4,14 +4,14 @@ import logging
 import tempfile
 from datetime import time, timezone, timedelta
 
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    filters, ContextTypes, ConversationHandler
+    filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 )
 
 from config import TELEGRAM_TOKEN
-from todoist_client import create_task, get_all_active_tasks, get_projects
+from todoist_client import create_task, get_all_active_tasks, get_projects, complete_task
 from voice import transcribe_voice, parse_due_date
 from reports import build_morning_report, build_evening_report
 from users import get_vlad_id, get_victoria_id, save_vlad_id, save_victoria_id
@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 LABEL_ORDER = {"🔴_Срочно": 0, "🟡_В_работе": 1, "⏳_Ожидаем_ответ": 2}
-ADDING_TASK = 1  # conversation state
+ADDING_TASK = 1
 
 VLAD_HELP = (
     "\n\n─────────────────\n"
@@ -35,11 +35,11 @@ VICTORIA_HELP = (
     "\n\n─────────────────\n"
     "📌 *Команды:*\n"
     "➕ Добавить задачу — поставить задачу в систему\n"
-    "📋 Список задач — все активные задачи по срочности\n"
-    "🔔 Уведомления — приходят автоматически при новой задаче от Влада"
+    "📋 По приоритету — задачи от срочных к обычным\n"
+    "🗂 По проектам — задачи сгруппированы по проекту\n"
+    "✅ Кнопка у задачи — отметить выполненной"
 )
 
-# ── Клавиатуры ───────────────────────────────────────────
 VLAD_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("➕ Добавить задачу"), KeyboardButton("📋 Список задач")],
@@ -52,6 +52,7 @@ VLAD_KEYBOARD = ReplyKeyboardMarkup(
 VICTORIA_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("➕ Добавить задачу"), KeyboardButton("📋 Список задач")],
+        [KeyboardButton("📊 По приоритету"), KeyboardButton("🗂 По проектам")],
         [KeyboardButton("🔔 Уведомления включены")],
     ],
     resize_keyboard=True
@@ -62,14 +63,21 @@ CANCEL_KEYBOARD = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+PRIORITY_KEYBOARD = InlineKeyboardMarkup([
+    [
+        InlineKeyboardButton("🔴 Срочно", callback_data="priority_🔴_Срочно"),
+        InlineKeyboardButton("🟡 В работе", callback_data="priority_🟡_В_работе"),
+        InlineKeyboardButton("⏳ Ожидаем", callback_data="priority_⏳_Ожидаем_ответ"),
+    ]
+])
 
-def detect_label(text: str) -> str:
-    lower = text.lower()
-    if "срочно" in lower or "срочная" in lower:
-        return "🔴_Срочно"
-    if "ожидаем" in lower or "ждём" in lower or "ждем" in lower:
-        return "⏳_Ожидаем_ответ"
-    return "🟡_В_работе"
+
+def label_emoji(labels):
+    if "🔴_Срочно" in labels:
+        return "🔴"
+    if "⏳_Ожидаем_ответ" in labels:
+        return "⏳"
+    return "🟡"
 
 
 def is_vlad(update: Update) -> bool:
@@ -100,94 +108,212 @@ async def notify_vlad(bot, text: str):
     await bot.send_message(chat_id=vlad_id, text=text, parse_mode="Markdown")
 
 
-# ── /start для Влада ─────────────────────────────────────
+# ── /start ────────────────────────────────────────────────
 async def start_vlad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     save_vlad_id(chat_id)
     await update.message.reply_text(
-        f"✅ *Система активирована, Влад!*\n\n🆔 Твой chat ID: `{chat_id}`\n\nДобавь его в Railway Variables как `VLAD_CHAT_ID`" + VLAD_HELP,
+        f"✅ *Система активирована, Влад!*\n\n🆔 Твой chat ID: `{chat_id}`\n\nДобавь в Railway Variables как `VLAD_CHAT_ID`" + VLAD_HELP,
         parse_mode="Markdown",
         reply_markup=VLAD_KEYBOARD
     )
 
 
-# ── /victoria для Виктории ───────────────────────────────
 async def start_victoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     save_victoria_id(chat_id)
     await update.message.reply_text(
-        f"✅ *Привет, Виктория!*\n\n🆔 Твой chat ID: `{chat_id}`\n\nДобавь его в Railway Variables как `VICTORIA_CHAT_ID`" + VICTORIA_HELP,
+        f"✅ *Привет, Виктория!*\n\n🆔 Твой chat ID: `{chat_id}`\n\nДобавь в Railway Variables как `VICTORIA_CHAT_ID`" + VICTORIA_HELP,
         parse_mode="Markdown",
         reply_markup=VICTORIA_KEYBOARD
     )
 
 
-# ── Кнопка «Добавить задачу» (начало диалога) ───────────
+# ── Добавление задачи (кнопка) ───────────────────────────
 async def btn_add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "✏️ Напиши задачу:",
-        reply_markup=CANCEL_KEYBOARD
-    )
+    await update.message.reply_text("✏️ Напиши задачу:", reply_markup=CANCEL_KEYBOARD)
     return ADDING_TASK
 
 
-async def receive_task_from_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def receive_task_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if text == "❌ Отмена":
         keyboard = VLAD_KEYBOARD if is_vlad(update) else VICTORIA_KEYBOARD
         await update.message.reply_text("Отменено.", reply_markup=keyboard)
         return ConversationHandler.END
 
-    due = parse_due_date(text)
-    label = detect_label(text)
-    create_task(content=text, due_string=due, label=label)
+    context.user_data["pending_task"] = text
+    context.user_data["pending_due"] = parse_due_date(text)
+    context.user_data["pending_sender"] = "Влад" if is_vlad(update) else "Виктория"
+    context.user_data["pending_chat_id"] = update.effective_chat.id
 
-    due_text = f" (срок: {due})" if due else ""
-    keyboard = VLAD_KEYBOARD if is_vlad(update) else VICTORIA_KEYBOARD
-    sender = "Влад" if is_vlad(update) else "Виктория"
-
-    help_text = VLAD_HELP if is_vlad(update) else VICTORIA_HELP
-    await update.message.reply_text(f"✅ Задача добавлена{due_text}" + help_text, parse_mode="Markdown", reply_markup=keyboard)
-    await notify_victoria(update.get_bot(), text, label, due, sender=sender)
-
-    if is_victoria(update):
-        await notify_vlad(update.get_bot(), f"📌 *Виктория добавила задачу:*\n\n{text}{due_text}")
-
+    await update.message.reply_text(
+        f"📝 *{text}*\n\nВыбери приоритет:",
+        parse_mode="Markdown",
+        reply_markup=PRIORITY_KEYBOARD
+    )
     return ConversationHandler.END
 
 
-# ── Кнопка «Список задач» ────────────────────────────────
-async def btn_task_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tasks = get_all_active_tasks()
-    if not tasks:
-        await update.message.reply_text("Нет активных задач.")
+# ── Выбор приоритета (callback) ───────────────────────────
+async def handle_priority_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    label = query.data.replace("priority_", "")
+    text = context.user_data.get("pending_task", "")
+    due = context.user_data.get("pending_due")
+    sender = context.user_data.get("pending_sender", "Влад")
+
+    if not text:
+        await query.edit_message_text("❌ Задача не найдена. Попробуй снова.")
         return
 
+    create_task(content=text, due_string=due, label=label)
+
+    emoji = label_emoji([label])
+    due_text = f" (срок: {due})" if due else ""
+    await query.edit_message_text(f"✅ Задача добавлена!\n{emoji} {text}{due_text}")
+
+    vlad_id = get_vlad_id()
+    is_vlad_user = query.from_user.id == vlad_id
+    keyboard = VLAD_KEYBOARD if is_vlad_user else VICTORIA_KEYBOARD
+    help_text = VLAD_HELP if is_vlad_user else VICTORIA_HELP
+    await query.message.reply_text("Что дальше?" + help_text, parse_mode="Markdown", reply_markup=keyboard)
+
+    await notify_victoria(query.get_bot(), text, label, due, sender=sender)
+    if not is_vlad_user:
+        await notify_vlad(query.get_bot(), f"📌 *Виктория добавила задачу:*\n\n{emoji} {text}{due_text}")
+
+    context.user_data.clear()
+
+
+# ── Построение списка задач ───────────────────────────────
+def build_by_priority(tasks):
+    priority_order = {"🔴_Срочно": 0, "🟡_В_работе": 1, "⏳_Ожидаем_ответ": 2}
+    sorted_tasks = sorted(tasks, key=lambda t: priority_order.get(
+        t.get("labels", [""])[0] if t.get("labels") else "", 3
+    ))
+
+    lines = ["📊 *По приоритету:*\n"]
+    keyboard = []
+    for t in sorted_tasks[:20]:
+        labels = t.get("labels", [])
+        e = label_emoji(labels)
+        lines.append(f"{e} {t['content']}")
+        keyboard.append([InlineKeyboardButton(
+            f"✅ {t['content'][:45]}", callback_data=f"done_{t['id']}"
+        )])
+
+    markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+    return "\n".join(lines), markup
+
+
+def build_by_project(tasks, project_names):
     from collections import defaultdict
     by_project = defaultdict(list)
     for t in tasks:
-        labels = t.get("labels", [])
-        priority = LABEL_ORDER.get(labels[0], 3) if labels else 3
-        by_project[t.get("project_id", "")].append((priority, t))
+        by_project[t.get("project_id", "")].append(t)
 
-    project_names = {p["id"]: p["name"] for p in get_projects()}
-
-    lines = ["📋 *Список задач:*\n"]
-    for project_id, items in sorted(by_project.items()):
+    lines = ["🗂 *По проектам:*\n"]
+    keyboard = []
+    for project_id, items in by_project.items():
         name = project_names.get(project_id, "Без проекта")
         lines.append(f"\n*{name}*")
-        for _, t in sorted(items, key=lambda x: x[0]):
+        for t in items[:10]:
             labels = t.get("labels", [])
-            e = "🔴" if "🔴_Срочно" in labels else "⏳" if "⏳_Ожидаем_ответ" in labels else "🟡"
+            e = label_emoji(labels)
             lines.append(f"{e} {t['content']}")
+            keyboard.append([InlineKeyboardButton(
+                f"✅ {t['content'][:45]}", callback_data=f"done_{t['id']}"
+            )])
 
-    text = "\n".join(lines)
+    markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+    return "\n".join(lines), markup
+
+
+# ── Кнопки списка задач ───────────────────────────────────
+async def btn_task_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tasks = get_all_active_tasks()
+    logger.info(f"Tasks fetched: {len(tasks)}")
+
+    if not tasks:
+        await update.message.reply_text("Нет активных задач 🎉")
+        return
+
+    if is_victoria(update):
+        text, markup = build_by_priority(tasks)
+    else:
+        from collections import defaultdict
+        by_project = defaultdict(list)
+        for t in tasks:
+            labels = t.get("labels", [])
+            priority = LABEL_ORDER.get(labels[0], 3) if labels else 3
+            by_project[t.get("project_id", "")].append((priority, t))
+
+        project_names = {p["id"]: p["name"] for p in get_projects()}
+        lines = ["📋 *Список задач:*\n"]
+        for project_id, items in sorted(by_project.items()):
+            name = project_names.get(project_id, "Без проекта")
+            lines.append(f"\n*{name}*")
+            for _, t in sorted(items, key=lambda x: x[0]):
+                e = label_emoji(t.get("labels", []))
+                lines.append(f"{e} {t['content']}")
+        text = "\n".join(lines)
+        markup = None
+
     if len(text) > 4000:
         text = text[:4000] + "\n..."
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
 
 
-# ── Кнопка «Ожидают ответ» (только Влад) ────────────────
+async def btn_view_by_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tasks = get_all_active_tasks()
+    if not tasks:
+        await update.message.reply_text("Нет активных задач 🎉")
+        return
+    text, markup = build_by_priority(tasks)
+    if len(text) > 4000:
+        text = text[:4000] + "\n..."
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
+
+
+async def btn_view_by_project(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tasks = get_all_active_tasks()
+    if not tasks:
+        await update.message.reply_text("Нет активных задач 🎉")
+        return
+    project_names = {p["id"]: p["name"] for p in get_projects()}
+    text, markup = build_by_project(tasks, project_names)
+    if len(text) > 4000:
+        text = text[:4000] + "\n..."
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
+
+
+# ── Отметить выполненной (callback) ──────────────────────
+async def handle_complete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("✅ Выполнено!")
+
+    task_id = query.data.replace("done_", "")
+    try:
+        complete_task(task_id)
+        tasks = get_all_active_tasks()
+        if tasks:
+            text, markup = build_by_priority(tasks)
+            if len(text) > 4000:
+                text = text[:4000] + "\n..."
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+        else:
+            await query.edit_message_text("🎉 Все задачи выполнены!")
+
+        await notify_vlad(query.get_bot(), "✅ *Виктория отметила задачу выполненной*")
+    except Exception as e:
+        logger.error(f"Complete task error: {e}")
+        await query.answer("❌ Ошибка при выполнении задачи", show_alert=True)
+
+
+# ── Ожидают ответ ─────────────────────────────────────────
 async def btn_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tasks = get_all_active_tasks()
     waiting = [t for t in tasks if "⏳_Ожидаем_ответ" in t.get("labels", [])]
@@ -205,16 +331,21 @@ async def btn_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
-# ── Прямой текст (без кнопки) — только для Влада ────────
+# ── Прямой текст от Влада ────────────────────────────────
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     due = parse_due_date(text)
-    label = detect_label(text)
 
-    create_task(content=text, due_string=due, label=label)
-    due_text = f" (срок: {due})" if due else ""
-    await update.message.reply_text(f"✅ Задача добавлена{due_text}" + VLAD_HELP, parse_mode="Markdown", reply_markup=VLAD_KEYBOARD)
-    await notify_victoria(context.bot, text, label, due)
+    context.user_data["pending_task"] = text
+    context.user_data["pending_due"] = due
+    context.user_data["pending_sender"] = "Влад"
+    context.user_data["pending_chat_id"] = update.effective_chat.id
+
+    await update.message.reply_text(
+        f"📝 *{text}*\n\nВыбери приоритет:",
+        parse_mode="Markdown",
+        reply_markup=PRIORITY_KEYBOARD
+    )
 
 
 # ── Голос ────────────────────────────────────────────────
@@ -228,14 +359,16 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = transcribe_voice(tmp_path)
         os.unlink(tmp_path)
         due = parse_due_date(text)
-        label = detect_label(text)
-        create_task(content=text, due_string=due, label=label)
-        due_text = f" (срок: {due})" if due else ""
+
+        context.user_data["pending_task"] = text
+        context.user_data["pending_due"] = due
+        context.user_data["pending_sender"] = "Влад"
+
         await update.message.reply_text(
-            f"🎙 *Распознано:* {text}\n\n✅ Задача добавлена{due_text}" + VLAD_HELP,
-            parse_mode="Markdown", reply_markup=VLAD_KEYBOARD
+            f"🎙 *Распознано:* {text}\n\nВыбери приоритет:",
+            parse_mode="Markdown",
+            reply_markup=PRIORITY_KEYBOARD
         )
-        await notify_victoria(context.bot, text, label, due)
     except Exception as e:
         logger.error(f"Voice error: {e}")
         await update.message.reply_text("❌ Не удалось расшифровать голосовое.")
@@ -245,13 +378,19 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption = update.message.caption or "Фото без описания"
     due = parse_due_date(caption)
-    label = detect_label(caption)
-    create_task(content=caption, due_string=due, label=label)
-    await update.message.reply_text(f"📎 Задача добавлена: {caption}" + VLAD_HELP, parse_mode="Markdown", reply_markup=VLAD_KEYBOARD)
-    await notify_victoria(context.bot, caption, label, due)
+
+    context.user_data["pending_task"] = caption
+    context.user_data["pending_due"] = due
+    context.user_data["pending_sender"] = "Влад"
+
+    await update.message.reply_text(
+        f"📎 *{caption}*\n\nВыбери приоритет:",
+        parse_mode="Markdown",
+        reply_markup=PRIORITY_KEYBOARD
+    )
 
 
-# ── Кнопка «Уведомления включены» (Виктория, заглушка) ──
+# ── Уведомления (заглушка) ────────────────────────────────
 async def btn_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🔔 Уведомления активны — ты получаешь сообщения о каждой новой задаче от Влада.",
@@ -276,13 +415,10 @@ async def send_evening_report(context: ContextTypes.DEFAULT_TYPE):
 async def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # ConversationHandler для кнопки «Добавить задачу»
     conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex("^➕ Добавить задачу$"), btn_add_task)
-        ],
+        entry_points=[MessageHandler(filters.Regex("^➕ Добавить задачу$"), btn_add_task)],
         states={
-            ADDING_TASK: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_task_from_button)]
+            ADDING_TASK: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_task_text)],
         },
         fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
     )
@@ -291,8 +427,12 @@ async def main():
     app.add_handler(CommandHandler("victoria", start_victoria))
     app.add_handler(conv)
     app.add_handler(MessageHandler(filters.Regex("^📋 Список задач$"), btn_task_list))
+    app.add_handler(MessageHandler(filters.Regex("^📊 По приоритету$"), btn_view_by_priority))
+    app.add_handler(MessageHandler(filters.Regex("^🗂 По проектам$"), btn_view_by_project))
     app.add_handler(MessageHandler(filters.Regex("^⏳ Ожидают ответ$"), btn_waiting))
     app.add_handler(MessageHandler(filters.Regex("^🔔 Уведомления включены$"), btn_notifications))
+    app.add_handler(CallbackQueryHandler(handle_priority_callback, pattern="^priority_"))
+    app.add_handler(CallbackQueryHandler(handle_complete_callback, pattern="^done_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))

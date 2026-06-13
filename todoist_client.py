@@ -94,9 +94,25 @@ def get_tasks_today():
 
 
 def get_all_active_tasks():
-    r = requests.get(f"{BASE_URL}/tasks", headers=HEADERS)
+    all_tasks = []
+    cursor = None
+    while True:
+        params = {}
+        if cursor:
+            params["cursor"] = cursor
+        r = requests.get(f"{BASE_URL}/tasks", headers=HEADERS, params=params)
+        r.raise_for_status()
+        data = r.json()
+        all_tasks.extend(data.get("results", []))
+        cursor = data.get("next_cursor")
+        if not cursor:
+            break
+    return all_tasks
+
+
+def complete_task(task_id: str):
+    r = requests.post(f"{BASE_URL}/tasks/{task_id}/close", headers=HEADERS)
     r.raise_for_status()
-    return r.json().get("results", [])
 
 
 def get_completed_today():
