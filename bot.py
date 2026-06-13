@@ -102,9 +102,10 @@ async def notify_vlad(bot, text: str):
 
 # ── /start для Влада ─────────────────────────────────────
 async def start_vlad(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    save_vlad_id(update.effective_chat.id)
+    chat_id = update.effective_chat.id
+    save_vlad_id(chat_id)
     await update.message.reply_text(
-        "✅ *Система активирована, Влад!*\n\nОтправляй задачи текстом, голосом или через кнопки." + VLAD_HELP,
+        f"✅ *Система активирована, Влад!*\n\n🆔 Твой chat ID: `{chat_id}`\n\nДобавь его в Railway Variables как `VLAD_CHAT_ID`" + VLAD_HELP,
         parse_mode="Markdown",
         reply_markup=VLAD_KEYBOARD
     )
@@ -112,9 +113,10 @@ async def start_vlad(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── /victoria для Виктории ───────────────────────────────
 async def start_victoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    save_victoria_id(update.effective_chat.id)
+    chat_id = update.effective_chat.id
+    save_victoria_id(chat_id)
     await update.message.reply_text(
-        "✅ *Привет, Виктория!*\n\nТы будешь получать уведомления о каждой новой задаче от Влада." + VICTORIA_HELP,
+        f"✅ *Привет, Виктория!*\n\n🆔 Твой chat ID: `{chat_id}`\n\nДобавь его в Railway Variables как `VICTORIA_CHAT_ID`" + VICTORIA_HELP,
         parse_mode="Markdown",
         reply_markup=VICTORIA_KEYBOARD
     )
