@@ -22,6 +22,23 @@ logger = logging.getLogger(__name__)
 LABEL_ORDER = {"🔴_Срочно": 0, "🟡_В_работе": 1, "⏳_Ожидаем_ответ": 2}
 ADDING_TASK = 1  # conversation state
 
+VLAD_HELP = (
+    "\n\n─────────────────\n"
+    "📌 *Команды:*\n"
+    "➕ Добавить задачу — кнопка или просто напиши текст\n"
+    "🎙 Голосовое — автоматически станет задачей\n"
+    "📋 Список задач — все активные задачи\n"
+    "⏳ Ожидают ответ — задачи на паузе"
+)
+
+VICTORIA_HELP = (
+    "\n\n─────────────────\n"
+    "📌 *Команды:*\n"
+    "➕ Добавить задачу — поставить задачу в систему\n"
+    "📋 Список задач — все активные задачи по срочности\n"
+    "🔔 Уведомления — приходят автоматически при новой задаче от Влада"
+)
+
 # ── Клавиатуры ───────────────────────────────────────────
 VLAD_KEYBOARD = ReplyKeyboardMarkup(
     [
@@ -87,7 +104,7 @@ async def notify_vlad(bot, text: str):
 async def start_vlad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_vlad_id(update.effective_chat.id)
     await update.message.reply_text(
-        "✅ *Система активирована, Влад!*\n\nОтправляй задачи текстом, голосом или через кнопки.",
+        "✅ *Система активирована, Влад!*\n\nОтправляй задачи текстом, голосом или через кнопки." + VLAD_HELP,
         parse_mode="Markdown",
         reply_markup=VLAD_KEYBOARD
     )
@@ -97,7 +114,7 @@ async def start_vlad(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_victoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_victoria_id(update.effective_chat.id)
     await update.message.reply_text(
-        "✅ *Привет, Виктория!*\n\nТы будешь получать уведомления о каждой новой задаче от Влада.",
+        "✅ *Привет, Виктория!*\n\nТы будешь получать уведомления о каждой новой задаче от Влада." + VICTORIA_HELP,
         parse_mode="Markdown",
         reply_markup=VICTORIA_KEYBOARD
     )
@@ -127,7 +144,8 @@ async def receive_task_from_button(update: Update, context: ContextTypes.DEFAULT
     keyboard = VLAD_KEYBOARD if is_vlad(update) else VICTORIA_KEYBOARD
     sender = "Влад" if is_vlad(update) else "Виктория"
 
-    await update.message.reply_text(f"✅ Задача добавлена{due_text}", reply_markup=keyboard)
+    help_text = VLAD_HELP if is_vlad(update) else VICTORIA_HELP
+    await update.message.reply_text(f"✅ Задача добавлена{due_text}" + help_text, parse_mode="Markdown", reply_markup=keyboard)
     await notify_victoria(update.get_bot(), text, label, due, sender=sender)
 
     if is_victoria(update):
@@ -193,7 +211,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     create_task(content=text, due_string=due, label=label)
     due_text = f" (срок: {due})" if due else ""
-    await update.message.reply_text(f"✅ Задача добавлена{due_text}", reply_markup=VLAD_KEYBOARD)
+    await update.message.reply_text(f"✅ Задача добавлена{due_text}" + VLAD_HELP, parse_mode="Markdown", reply_markup=VLAD_KEYBOARD)
     await notify_victoria(context.bot, text, label, due)
 
 
@@ -212,7 +230,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         create_task(content=text, due_string=due, label=label)
         due_text = f" (срок: {due})" if due else ""
         await update.message.reply_text(
-            f"🎙 *Распознано:* {text}\n\n✅ Задача добавлена{due_text}",
+            f"🎙 *Распознано:* {text}\n\n✅ Задача добавлена{due_text}" + VLAD_HELP,
             parse_mode="Markdown", reply_markup=VLAD_KEYBOARD
         )
         await notify_victoria(context.bot, text, label, due)
@@ -227,7 +245,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     due = parse_due_date(caption)
     label = detect_label(caption)
     create_task(content=caption, due_string=due, label=label)
-    await update.message.reply_text(f"📎 Задача добавлена: {caption}", reply_markup=VLAD_KEYBOARD)
+    await update.message.reply_text(f"📎 Задача добавлена: {caption}" + VLAD_HELP, parse_mode="Markdown", reply_markup=VLAD_KEYBOARD)
     await notify_victoria(context.bot, caption, label, due)
 
 
