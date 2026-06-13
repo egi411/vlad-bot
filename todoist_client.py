@@ -102,11 +102,10 @@ def get_all_active_tasks():
 def get_completed_today():
     today = datetime.now().strftime("%Y-%m-%d")
     r = requests.get(
-        f"{BASE_URL}/tasks/completed/get_all",
+        "https://api.todoist.com/sync/v9/items/completed/get_all",
         headers=HEADERS,
-        params={"since": f"{today}T00:00:00", "limit": 50}
+        params={"since": f"{today}T00:00:00Z", "limit": 50}
     )
     if r.status_code == 200:
-        data = r.json()
-        return data.get("results", data.get("items", []))
+        return r.json().get("items", [])
     return []

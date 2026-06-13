@@ -249,15 +249,23 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await notify_victoria(context.bot, caption, label, due)
 
 
+# ── Кнопка «Уведомления включены» (Виктория, заглушка) ──
+async def btn_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🔔 Уведомления активны — ты получаешь сообщения о каждой новой задаче от Влада.",
+        reply_markup=VICTORIA_KEYBOARD
+    )
+
+
 # ── Отчёты ───────────────────────────────────────────────
 async def send_morning_report(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = get_vlad_id()
+    chat_id = get_victoria_id()
     if chat_id:
         await context.bot.send_message(chat_id=chat_id, text=build_morning_report(), parse_mode="Markdown")
 
 
 async def send_evening_report(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = get_vlad_id()
+    chat_id = get_victoria_id()
     if chat_id:
         await context.bot.send_message(chat_id=chat_id, text=build_evening_report(), parse_mode="Markdown")
 
@@ -282,6 +290,7 @@ async def main():
     app.add_handler(conv)
     app.add_handler(MessageHandler(filters.Regex("^📋 Список задач$"), btn_task_list))
     app.add_handler(MessageHandler(filters.Regex("^⏳ Ожидают ответ$"), btn_waiting))
+    app.add_handler(MessageHandler(filters.Regex("^🔔 Уведомления включены$"), btn_notifications))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
