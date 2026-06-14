@@ -188,13 +188,13 @@ async def btn_add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receive_task_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if text == "❌ Отмена" or text in MENU_BUTTONS:
-        keyboard = VLAD_KEYBOARD if is_vlad(update) else _victoria_keyboard(update.effective_chat.id)
+        keyboard = _victoria_keyboard(update.effective_chat.id) if is_victoria(update) else VLAD_KEYBOARD
         await update.message.reply_text("Отменено.", reply_markup=keyboard)
         return ConversationHandler.END
 
     context.user_data["pending_task"] = text
     context.user_data["pending_due"] = parse_due_date(text)
-    context.user_data["pending_sender"] = "Влад" if is_vlad(update) else "Виктория"
+    context.user_data["pending_sender"] = "Виктория" if is_victoria(update) else "Влад"
     context.user_data["pending_chat_id"] = update.effective_chat.id
 
     await update.message.reply_text(
@@ -453,11 +453,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["pending_task"] = text
     context.user_data["pending_due"] = due
-    context.user_data["pending_sender"] = "Влад"
+    context.user_data["pending_sender"] = "Виктория" if is_victoria(update) else "Влад"
     context.user_data["pending_chat_id"] = update.effective_chat.id
 
     await update.message.reply_text(
-        f"📝 *{text}*\n\nВыбери приоритет:",
+        f"📝 *{escape_md(text)}*\n\nВыбери приоритет:",
         parse_mode="Markdown",
         reply_markup=PRIORITY_KEYBOARD
     )
@@ -501,7 +501,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["pending_due"] = due
         context.user_data["pending_priority"] = priority
         context.user_data["pending_project"] = category
-        context.user_data["pending_sender"] = "Влад" if is_vlad(update) else "Виктория"
+        context.user_data["pending_sender"] = "Виктория" if is_victoria(update) else "Влад"
         context.user_data["pending_chat_id"] = update.effective_chat.id
 
         e = PRIORITY_EMOJI[priority]
