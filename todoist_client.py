@@ -69,7 +69,7 @@ def setup_structure():
     return project_ids
 
 
-def create_task(content, project_name="VLAD BYKOV", due_string=None, label=None):
+def create_task(content, project_name="VLAD BYKOV", due_string=None, priority=None, labels=None):
     projects = {p["name"]: p["id"] for p in get_projects()}
     project_id = projects.get(project_name)
 
@@ -79,8 +79,10 @@ def create_task(content, project_name="VLAD BYKOV", due_string=None, label=None)
     if due_string:
         payload["due_string"] = due_string
         payload["due_lang"] = "ru"
-    if label:
-        payload["labels"] = [label]
+    if priority:
+        payload["priority"] = priority  # 4=p1 срочно, 3=p2 важно, 2=p3 обычно, 1=p4 условно
+    if labels:
+        payload["labels"] = labels
 
     r = requests.post(f"{BASE_URL}/tasks", headers=HEADERS, json=payload)
     r.raise_for_status()
