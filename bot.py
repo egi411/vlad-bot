@@ -263,26 +263,12 @@ async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT
 
 # ── Построение списка задач ───────────────────────────────
 def _build_keyboard(tasks_with_index, victoria_view: bool) -> InlineKeyboardMarkup | None:
-    """Action buttons per task (one row each) + card buttons 2 per row at the bottom."""
-    keyboard = []
-    card_buttons = []
-
-    for i, t in tasks_with_index:
-        tid = t["id"]
-        short = t["content"][:22]
-
-        if victoria_view:
-            action_row = []
-            if t.get("status") != "waiting":
-                action_row.append(InlineKeyboardButton("⏳ Жду ответа", callback_data=f"wait_{tid}"))
-            action_row.append(InlineKeyboardButton("✅ Выполнить", callback_data=f"done_{tid}"))
-            keyboard.append(action_row)
-
-        card_buttons.append(InlineKeyboardButton(f"💬 {i}. {short}", callback_data=f"card_{tid}"))
-
-    for j in range(0, len(card_buttons), 2):
-        keyboard.append(card_buttons[j:j + 2])
-
+    """Card buttons only, 2 per row. Actions moved inside the card."""
+    card_buttons = [
+        InlineKeyboardButton(f"💬 {i}. {t['content'][:22]}", callback_data=f"card_{t['id']}")
+        for i, t in tasks_with_index
+    ]
+    keyboard = [card_buttons[j:j + 2] for j in range(0, len(card_buttons), 2)]
     return InlineKeyboardMarkup(keyboard) if keyboard else None
 
 
@@ -357,9 +343,16 @@ def _card_text_and_markup(task_id: int):
                     dt = str(c["created_at"])[:16]
             lines.append(f"• _{escape_md(c['author'])} [{dt}]:_ {escape_md(c['text'])}")
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("💬 Добавить комментарий", callback_data=f"comment_{task_id}")
-    ]])
+    rows = []
+    if task["status"] != "done":
+        action_row = []
+        if task["status"] != "waiting":
+            action_row.append(InlineKeyboardButton("⏳ Жду ответа", callback_data=f"wait_{task_id}"))
+        action_row.append(InlineKeyboardButton("✅ Выполнить", callback_data=f"done_{task_id}"))
+        rows.append(action_row)
+    rows.append([InlineKeyboardButton("💬 Добавить комментарий / процесс", callback_data=f"comment_{task_id}")])
+
+    keyboard = InlineKeyboardMarkup(rows)
     return "\n".join(lines), keyboard
 
 
