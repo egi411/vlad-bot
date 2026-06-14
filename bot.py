@@ -163,7 +163,7 @@ async def start_vlad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     save_vlad_id(chat_id)
     await update.message.reply_text(
-        f"✅ *Система активирована, Влад!*\n\n🆔 Твой chat ID: `{chat_id}`\n\nДобавь в Railway Variables как `VLAD_CHAT_ID`" + VLAD_HELP,
+        "✅ *Система активирована, Влад!*" + VLAD_HELP,
         parse_mode="Markdown",
         reply_markup=VLAD_KEYBOARD
     )
@@ -173,7 +173,7 @@ async def start_victoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     save_victoria_id(chat_id)
     await update.message.reply_text(
-        f"✅ *Привет, Виктория!*\n\n🆔 Твой chat ID: `{chat_id}`\n\nДобавь в Railway Variables как `VICTORIA_CHAT_ID`" + VICTORIA_HELP,
+        "✅ *Привет, Виктория!*" + VICTORIA_HELP,
         parse_mode="Markdown",
         reply_markup=_victoria_keyboard(update.effective_chat.id)
     )
