@@ -249,21 +249,19 @@ async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT
     cat_e = CATEGORY_EMOJI.get(project_name, "📁")
     display_name = "Клиенты" if project_name == "VLAD BYKOV" else project_name
 
-    vlad_id = get_vlad_id()
-    is_vlad_user = query.from_user.id == vlad_id
-
     due = context.user_data.get("pending_due")
     create_task(content=text, due_string=due, priority=priority, project_name=project_name)
     due_text = f" (срок: {due})" if due else ""
     await query.edit_message_text(f"✅ Задача добавлена!\n{e} {text}{due_text}\n{cat_e} {display_name}")
 
-    if is_vlad_user:
+    sender = context.user_data.get("pending_sender", "Влад")
+    if sender == "Влад":
         await query.message.reply_text("Что дальше?" + VLAD_HELP, parse_mode="Markdown", reply_markup=VLAD_KEYBOARD)
         await notify_victoria(query.get_bot(), text, priority, due, sender="Влад")
     else:
         await query.message.reply_text("Что дальше?" + VICTORIA_HELP, parse_mode="Markdown", reply_markup=_victoria_keyboard(query.from_user.id))
         await notify_victoria(query.get_bot(), text, priority, due, sender="Виктория")
-        await notify_vlad(query.get_bot(), f"📌 *Виктория добавила задачу:*\n\n{e} {text}{due_text}\n{cat_e} {display_name}")
+        await notify_vlad(query.get_bot(), f"📌 *Виктория добавила задачу:*\n\n{e} {escape_md(text)}{due_text}\n{cat_e} {display_name}")
     context.user_data.clear()
 
 
@@ -540,10 +538,9 @@ async def handle_voice_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
     due_text = f" (срок: {due})" if due else ""
     await query.edit_message_text(f"✅ Задача создана!\n{e} {text}{due_text}\n{cname}")
 
-    vlad_id = get_vlad_id()
-    if query.from_user.id == vlad_id:
+    if sender == "Влад":
         await query.message.reply_text("Что дальше?" + VLAD_HELP, parse_mode="Markdown", reply_markup=VLAD_KEYBOARD)
-        await notify_victoria(query.get_bot(), text, priority, due, sender=sender)
+        await notify_victoria(query.get_bot(), text, priority, due, sender="Влад")
     else:
         await query.message.reply_text("Что дальше?" + VICTORIA_HELP, parse_mode="Markdown", reply_markup=_victoria_keyboard(query.from_user.id))
         await notify_vlad(query.get_bot(), f"📌 *Виктория добавила задачу:*\n\n{e} {escape_md(text)}{due_text}\n{cname}")
