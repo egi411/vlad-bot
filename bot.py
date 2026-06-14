@@ -261,33 +261,43 @@ async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT
     context.user_data.clear()
 
 
-# ── task_buttons helper ───────────────────────────────────
-def task_buttons(t, victoria_view: bool = False) -> list[InlineKeyboardButton]:
-    tid = t["id"]
-    buttons = []
-    if victoria_view:
-        if t.get("status") != "waiting":
-            buttons.append(InlineKeyboardButton("⏳ Жду ответа", callback_data=f"wait_{tid}"))
-        buttons.append(InlineKeyboardButton("✅ Выполнить", callback_data=f"done_{tid}"))
-    buttons.append(InlineKeyboardButton("💬 Карточка", callback_data=f"card_{tid}"))
-    return buttons
-
-
 # ── Построение списка задач ───────────────────────────────
+def _build_keyboard(tasks_with_index, victoria_view: bool) -> InlineKeyboardMarkup | None:
+    """Action buttons per task (one row each) + card buttons 2 per row at the bottom."""
+    keyboard = []
+    card_buttons = []
+
+    for i, t in tasks_with_index:
+        tid = t["id"]
+        short = t["content"][:22]
+
+        if victoria_view:
+            action_row = []
+            if t.get("status") != "waiting":
+                action_row.append(InlineKeyboardButton("⏳ Жду ответа", callback_data=f"wait_{tid}"))
+            action_row.append(InlineKeyboardButton("✅ Выполнить", callback_data=f"done_{tid}"))
+            keyboard.append(action_row)
+
+        card_buttons.append(InlineKeyboardButton(f"💬 {i}. {short}", callback_data=f"card_{tid}"))
+
+    for j in range(0, len(card_buttons), 2):
+        keyboard.append(card_buttons[j:j + 2])
+
+    return InlineKeyboardMarkup(keyboard) if keyboard else None
+
+
 def build_by_priority(tasks, victoria_view: bool = False):
-    sorted_tasks = sorted(tasks, key=lambda t: -t.get("priority", 1))
+    sorted_tasks = sorted(tasks, key=lambda t: -t.get("priority", 1))[:20]
 
     lines = ["📊 *По приоритету:*\n"]
-    keyboard = []
-    for t in sorted_tasks[:20]:
+    indexed = []
+    for i, t in enumerate(sorted_tasks, 1):
         e = priority_emoji(t)
         waiting = " ⏳" if t.get("status") == "waiting" else ""
-        lines.append(f"{e} {escape_md(t['content'])}{waiting}")
-        btns = task_buttons(t, victoria_view=victoria_view)
-        if btns:
-            keyboard.append(btns)
+        lines.append(f"{i}. {e} {escape_md(t['content'])}{waiting}")
+        indexed.append((i, t))
 
-    markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+    markup = _build_keyboard(indexed, victoria_view=victoria_view)
     return "\n".join(lines), markup
 
 
@@ -298,19 +308,18 @@ def build_by_project(tasks, victoria_view: bool = False):
         by_project[t.get("project", "Без проекта")].append(t)
 
     lines = ["🗂 *По проектам:*\n"]
-    keyboard = []
+    indexed = []
+    counter = 1
     for project_name, items in by_project.items():
-        name = escape_md(project_name)
-        lines.append(f"\n*{name}*")
+        lines.append(f"\n*{escape_md(project_name)}*")
         for t in sorted(items, key=lambda t: -t.get("priority", 1))[:10]:
             e = priority_emoji(t)
             waiting = " ⏳" if t.get("status") == "waiting" else ""
-            lines.append(f"{e} {escape_md(t['content'])}{waiting}")
-            btns = task_buttons(t, victoria_view=victoria_view)
-            if btns:
-                keyboard.append(btns)
+            lines.append(f"{counter}. {e} {escape_md(t['content'])}{waiting}")
+            indexed.append((counter, t))
+            counter += 1
 
-    markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+    markup = _build_keyboard(indexed, victoria_view=victoria_view)
     return "\n".join(lines), markup
 
 
@@ -482,17 +491,18 @@ async def btn_task_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 by_project[t.get("project", "Без проекта")].append(t)
 
             lines = ["📋 *Список задач:*\n"]
-            keyboard = []
+            indexed = []
+            counter = 1
             for project_name, items in by_project.items():
-                name = escape_md(project_name)
-                lines.append(f"\n*{name}*")
+                lines.append(f"\n*{escape_md(project_name)}*")
                 for t in sorted(items, key=lambda t: -t.get("priority", 1)):
                     e = priority_emoji(t)
                     waiting = " ⏳" if t.get("status") == "waiting" else ""
-                    lines.append(f"{e} {escape_md(t['content'])}{waiting}")
-                    keyboard.append([InlineKeyboardButton("💬 Карточка", callback_data=f"card_{t['id']}")])
+                    lines.append(f"{counter}. {e} {escape_md(t['content'])}{waiting}")
+                    indexed.append((counter, t))
+                    counter += 1
             text = "\n".join(lines)
-            markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+            markup = _build_keyboard(indexed, victoria_view=False)
 
         if len(text) > 4000:
             text = text[:4000] + "\n..."
@@ -534,14 +544,14 @@ async def btn_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     lines = ["⏳ *Ожидают ответа:*\n"]
-    keyboard = []
-    for t in sorted(waiting, key=lambda t: -t.get("priority", 1)):
+    indexed = []
+    for i, t in enumerate(sorted(waiting, key=lambda t: -t.get("priority", 1)), 1):
         e = priority_emoji(t)
         due_text = f" — {t['due']}" if t.get("due") else ""
-        lines.append(f"{e} {escape_md(t['content'])}{due_text}")
-        keyboard.append([InlineKeyboardButton("💬 Карточка", callback_data=f"card_{t['id']}")])
+        lines.append(f"{i}. {e} {escape_md(t['content'])}{due_text}")
+        indexed.append((i, t))
 
-    markup = InlineKeyboardMarkup(keyboard)
+    markup = _build_keyboard(indexed, victoria_view=False)
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=markup)
 
 
