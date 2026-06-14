@@ -29,7 +29,7 @@ ADDING_TASK = 1
 # Кнопки меню — не должны создавать задачу внутри ConversationHandler
 MENU_BUTTONS = {
     "📋 Список задач", "📊 По приоритету", "🗂 По проектам",
-    "⏳ Ожидают ответ", "🔔 Уведомления включены", "🔕 Уведомления отключены",
+    "Ожидают ответ", "🔔 Уведомления включены", "🔕 Уведомления отключены",
     "➕ Добавить задачу",
 }
 
@@ -42,7 +42,7 @@ VLAD_HELP = (
     "➕ Добавить задачу — кнопка или просто напиши текст\n"
     "🎙 Голосовое — автоматически станет задачей\n"
     "📋 Список задач — все активные задачи\n"
-    "⏳ Ожидают ответ — задачи, которые Виктория ждёт от тебя"
+    "Ожидают ответ — задачи, которые Виктория ждёт от тебя"
 )
 
 VICTORIA_HELP = (
@@ -57,7 +57,7 @@ VICTORIA_HELP = (
 VLAD_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("➕ Добавить задачу"), KeyboardButton("📋 Список задач")],
-        [KeyboardButton("⏳ Ожидают ответ")],
+        [KeyboardButton("Ожидают ответ")],
     ],
     resize_keyboard=True,
     input_field_placeholder="Или напиши задачу текстом..."
@@ -278,7 +278,7 @@ async def handle_wait_done_callback(update: Update, context: ContextTypes.DEFAUL
 
         await notify_vlad(
             query.get_bot(),
-            "⏳ *Виктория ждёт твоего ответа по задаче*\n\nНажми «⏳ Ожидают ответ» чтобы посмотреть"
+            "⏳ *Виктория ждёт твоего ответа по задаче*\n\nНажми «Ожидают ответ» чтобы посмотреть"
         )
     except Exception as e:
         logger.error(f"Wait done error: {e}")
@@ -607,7 +607,7 @@ async def main():
     app.add_handler(MessageHandler(filters.Regex("^📋 Список задач$"), btn_task_list))
     app.add_handler(MessageHandler(filters.Regex("^📊 По приоритету$"), btn_view_by_priority))
     app.add_handler(MessageHandler(filters.Regex("^🗂 По проектам$"), btn_view_by_project))
-    app.add_handler(MessageHandler(filters.Regex("^⏳ Ожидают ответ$"), btn_waiting))
+    app.add_handler(MessageHandler(filters.Regex("^Ожидают ответ$"), btn_waiting))
     app.add_handler(MessageHandler(
         filters.Regex("^(🔔 Уведомления включены|🔕 Уведомления отключены)$"),
         btn_notifications
