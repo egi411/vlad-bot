@@ -296,20 +296,15 @@ async def handle_wait_done_callback(update: Update, context: ContextTypes.DEFAUL
 
 
 # ── Построение списка задач ───────────────────────────────
-def task_buttons(t, for_vlad=False):
-    name = t["content"][:35]
-    if for_vlad:
-        # Влад может закрыть задачу из списка "Ожидают ответ"
-        return [InlineKeyboardButton(f"✅ Закрыть", callback_data=f"done_{t['id']}")]
-    else:
-        # Виктория: выполнено или жду ответа
-        return [
-            InlineKeyboardButton("✅ Готово", callback_data=f"done_{t['id']}"),
-            InlineKeyboardButton("⏳ Жду ответа", callback_data=f"wait_{t['id']}"),
-        ]
+def task_buttons(t):
+    name = t["content"][:28]
+    return [
+        InlineKeyboardButton(f"✅ {name}", callback_data=f"done_{t['id']}"),
+        InlineKeyboardButton(f"⏳ {name}", callback_data=f"wait_{t['id']}"),
+    ]
 
 
-def build_by_priority(tasks, for_vlad=False):
+def build_by_priority(tasks):
     sorted_tasks = sorted(tasks, key=lambda t: -t.get("priority", 1))
 
     lines = ["📊 *По приоритету:*\n"]
@@ -318,7 +313,7 @@ def build_by_priority(tasks, for_vlad=False):
         e = priority_emoji(t)
         waiting = " ⏳" if is_waiting(t) else ""
         lines.append(f"{e} {escape_md(t['content'])}{waiting}")
-        keyboard.append(task_buttons(t, for_vlad=for_vlad))
+        keyboard.append(task_buttons(t))
 
     markup = InlineKeyboardMarkup(keyboard) if keyboard else None
     return "\n".join(lines), markup
@@ -366,7 +361,7 @@ async def btn_task_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             project_names = {p["id"]: p["name"] for p in get_projects()}
             lines = ["📋 *Список задач:*\n"]
             for project_id, items in by_project.items():
-                name = project_names.get(project_id, "Без проекта")
+                name = escape_md(project_names.get(project_id, "Без проекта"))
                 lines.append(f"\n*{name}*")
                 for t in sorted(items, key=lambda t: -t.get("priority", 1)):
                     e = priority_emoji(t)
