@@ -98,6 +98,17 @@ def get_tasks_today():
     return r.json().get("results", [])
 
 
+def get_known_project_ids() -> set:
+    """Возвращает set из ID наших 4 проектов."""
+    known_names = set(PROJECTS.keys())
+    try:
+        projects = get_projects()
+        return {p["id"] for p in projects if p["name"] in known_names}
+    except Exception as e:
+        logger.error(f"get_known_project_ids error: {e}")
+        return set()
+
+
 def get_all_active_tasks():
     all_tasks = []
     cursor = None
@@ -122,6 +133,11 @@ def get_all_active_tasks():
     except Exception as e:
         logger.error(f"get_all_active_tasks error: {e}")
     logger.info(f"Total tasks fetched: {len(all_tasks)}")
+    # Фильтруем только задачи из наших проектов
+    known_ids = get_known_project_ids()
+    if known_ids:
+        all_tasks = [t for t in all_tasks if t.get("project_id") in known_ids]
+        logger.info(f"Tasks after project filter: {len(all_tasks)}")
     return all_tasks
 
 
