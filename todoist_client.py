@@ -117,6 +117,17 @@ def complete_task(task_id: str):
     r.raise_for_status()
 
 
+def add_label_to_task(task_id: str, label: str):
+    r = requests.get(f"{BASE_URL}/tasks/{task_id}", headers=HEADERS)
+    r.raise_for_status()
+    task = r.json()
+    labels = task.get("labels", [])
+    if label not in labels:
+        labels.append(label)
+    r2 = requests.post(f"{BASE_URL}/tasks/{task_id}", headers=HEADERS, json={"labels": labels})
+    r2.raise_for_status()
+
+
 def get_completed_today():
     today = datetime.now().strftime("%Y-%m-%d")
     r = requests.get(
