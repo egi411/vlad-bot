@@ -275,18 +275,11 @@ async def handle_wait_done_callback(update: Update, context: ContextTypes.DEFAUL
         from todoist_client import add_label_to_task
         add_label_to_task(task_id, WAITING_LABEL)
 
-        tasks = get_all_active_tasks()
-        if tasks:
-            text, markup = build_by_priority(tasks)
-            if len(text) > 4000:
-                text = text[:4000] + "\n..."
-            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
-        else:
-            await query.edit_message_text("🎉 Все задачи выполнены!")
+        await query.edit_message_text("⏳ Отмечено — ждёшь ответа от Влада.")
 
         await notify_vlad(
             query.get_bot(),
-            "⏳ *Виктория выполнила задачу и ожидает твоего ответа*\n\nПосмотри список «⏳ Ожидают ответ»"
+            "⏳ *Виктория ждёт твоего ответа по задаче*\n\nНажми «⏳ Ожидают ответ» чтобы посмотреть"
         )
     except Exception as e:
         logger.error(f"Wait done error: {e}")
@@ -295,11 +288,8 @@ async def handle_wait_done_callback(update: Update, context: ContextTypes.DEFAUL
 
 # ── Построение списка задач ───────────────────────────────
 def task_buttons(t):
-    name = t["content"][:28]
-    return [
-        InlineKeyboardButton(f"✅ {name}", callback_data=f"done_{t['id']}"),
-        InlineKeyboardButton(f"⏳ {name}", callback_data=f"wait_{t['id']}"),
-    ]
+    name = t["content"][:40]
+    return [InlineKeyboardButton(f"⏳ Жду ответа: {name}", callback_data=f"wait_{t['id']}")]
 
 
 def build_by_priority(tasks):
@@ -407,16 +397,7 @@ async def handle_complete_callback(update: Update, context: ContextTypes.DEFAULT
     task_id = query.data.replace("done_", "")
     try:
         complete_task(task_id)
-        tasks = get_all_active_tasks()
-        if tasks:
-            text, markup = build_by_priority(tasks)
-            if len(text) > 4000:
-                text = text[:4000] + "\n..."
-            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
-        else:
-            await query.edit_message_text("🎉 Все задачи выполнены!")
-
-        await notify_vlad(query.get_bot(), "✅ *Виктория отметила задачу выполненной*")
+        await query.edit_message_text("✅ Задача закрыта.")
     except Exception as e:
         logger.error(f"Complete task error: {e}")
         await query.answer("❌ Ошибка при выполнении задачи", show_alert=True)
