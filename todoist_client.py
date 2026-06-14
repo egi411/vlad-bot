@@ -1,6 +1,9 @@
 import requests
+import logging
 from datetime import datetime
 from config import TODOIST_TOKEN
+
+logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.todoist.com/api/v1"
 HEADERS = {"Authorization": f"Bearer {TODOIST_TOKEN}"}
@@ -98,17 +101,27 @@ def get_tasks_today():
 def get_all_active_tasks():
     all_tasks = []
     cursor = None
-    while True:
-        params = {}
-        if cursor:
-            params["cursor"] = cursor
-        r = requests.get(f"{BASE_URL}/tasks", headers=HEADERS, params=params)
-        r.raise_for_status()
-        data = r.json()
-        all_tasks.extend(data.get("results", []))
-        cursor = data.get("next_cursor")
-        if not cursor:
-            break
+    try:
+        while True:
+            params = {}
+            if cursor:
+                params["cursor"] = cursor
+            r = requests.get(f"{BASE_URL}/tasks", headers=HEADERS, params=params)
+            logger.info(f"Todoist GET /tasks status={r.status_code}")
+            if r.status_code != 200:
+                logger.error(f"Todoist error: {r.status_code} {r.text[:300]}")
+                break
+            data = r.json()
+            logger.info(f"Todoist response keys: {list(data.keys())}")
+            batch = data.get("results", data.get("items", []))
+            logger.info(f"Todoist batch size: {len(batch)}")
+            all_tasks.extend(batch)
+            cursor = data.get("next_cursor")
+            if not cursor:
+                break
+    except Exception as e:
+        logger.error(f"get_all_active_tasks error: {e}")
+    logger.info(f"Total tasks fetched: {len(all_tasks)}")
     return all_tasks
 
 

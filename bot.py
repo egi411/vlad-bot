@@ -341,36 +341,40 @@ def build_by_project(tasks, project_names):
 
 # ── Кнопки списка задач ───────────────────────────────────
 async def btn_task_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tasks = get_all_active_tasks()
-    logger.info(f"Tasks fetched: {len(tasks)}")
+    try:
+        tasks = get_all_active_tasks()
+        logger.info(f"Tasks fetched: {len(tasks)}")
 
-    if not tasks:
-        await update.message.reply_text("Нет активных задач 🎉")
-        return
+        if not tasks:
+            await update.message.reply_text("Нет активных задач 🎉")
+            return
 
-    if is_victoria(update):
-        text, markup = build_by_priority(tasks)
-    else:
-        from collections import defaultdict
-        by_project = defaultdict(list)
-        for t in tasks:
-            by_project[t.get("project_id", "")].append(t)
+        if is_victoria(update):
+            text, markup = build_by_priority(tasks)
+        else:
+            from collections import defaultdict
+            by_project = defaultdict(list)
+            for t in tasks:
+                by_project[t.get("project_id", "")].append(t)
 
-        project_names = {p["id"]: p["name"] for p in get_projects()}
-        lines = ["📋 *Список задач:*\n"]
-        for project_id, items in by_project.items():
-            name = project_names.get(project_id, "Без проекта")
-            lines.append(f"\n*{name}*")
-            for t in sorted(items, key=lambda t: -t.get("priority", 1)):
-                e = priority_emoji(t)
-                waiting = " ⏳" if is_waiting(t) else ""
-                lines.append(f"{e} {t['content']}{waiting}")
-        text = "\n".join(lines)
-        markup = None
+            project_names = {p["id"]: p["name"] for p in get_projects()}
+            lines = ["📋 *Список задач:*\n"]
+            for project_id, items in by_project.items():
+                name = project_names.get(project_id, "Без проекта")
+                lines.append(f"\n*{name}*")
+                for t in sorted(items, key=lambda t: -t.get("priority", 1)):
+                    e = priority_emoji(t)
+                    waiting = " ⏳" if is_waiting(t) else ""
+                    lines.append(f"{e} {t['content']}{waiting}")
+            text = "\n".join(lines)
+            markup = None
 
-    if len(text) > 4000:
-        text = text[:4000] + "\n..."
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
+        if len(text) > 4000:
+            text = text[:4000] + "\n..."
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
+    except Exception as e:
+        logger.error(f"btn_task_list error: {e}")
+        await update.message.reply_text(f"❌ Ошибка загрузки задач: {e}")
 
 
 async def btn_view_by_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
