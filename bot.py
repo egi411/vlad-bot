@@ -406,7 +406,11 @@ async def handle_complete_callback(update: Update, context: ContextTypes.DEFAULT
 # ── Ожидают ответ (Влад) ─────────────────────────────────
 async def btn_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tasks = get_all_active_tasks()
+    logger.info(f"btn_waiting: total tasks={len(tasks)}")
+    for t in tasks:
+        logger.info(f"  task id={t['id']} labels={t.get('labels')} content={t['content'][:40]}")
     waiting = [t for t in tasks if is_waiting(t)]
+    logger.info(f"btn_waiting: waiting tasks={len(waiting)}, WAITING_LABEL={repr(WAITING_LABEL)}")
 
     if not waiting:
         await update.message.reply_text("⏳ Нет задач, ожидающих ответа.")

@@ -150,12 +150,19 @@ def complete_task(task_id: str):
 
 def add_label_to_task(task_id: str, label: str):
     r = requests.get(f"{BASE_URL}/tasks/{task_id}", headers=HEADERS)
+    logger.info(f"GET task/{task_id} status={r.status_code}")
     r.raise_for_status()
-    task = r.json()
+    raw = r.json()
+    logger.info(f"GET task raw keys: {list(raw.keys())}")
+    # API v1 может вернуть задачу напрямую или обёрнуто в 'result'
+    task = raw.get("result", raw)
     labels = task.get("labels", [])
+    logger.info(f"Current labels: {labels}")
     if label not in labels:
         labels.append(label)
+    logger.info(f"Sending labels update: {labels}")
     r2 = requests.post(f"{BASE_URL}/tasks/{task_id}", headers=HEADERS, json={"labels": labels})
+    logger.info(f"POST task/{task_id} status={r2.status_code} body={r2.text[:200]}")
     r2.raise_for_status()
 
 
