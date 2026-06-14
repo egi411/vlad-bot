@@ -121,6 +121,12 @@ def is_waiting(task):
     return WAITING_LABEL in task.get("labels", [])
 
 
+def escape_md(text: str) -> str:
+    for ch in ['\\', '*', '_', '`', '[']:
+        text = text.replace(ch, f'\\{ch}')
+    return text
+
+
 def is_vlad(update: Update) -> bool:
     return update.effective_chat.id == get_vlad_id()
 
@@ -140,7 +146,7 @@ async def notify_victoria(bot, task_content: str, priority: int, due: str | None
     name = PRIORITY_NAMES.get(priority, "Обычно")
     await bot.send_message(
         chat_id=victoria_id,
-        text=f"📌 *{sender} добавил задачу:*\n\n{e} [{name}] {task_content}{due_text}",
+        text=f"📌 *{sender} добавил задачу:*\n\n{e} [{name}] {escape_md(task_content)}{due_text}",
         parse_mode="Markdown"
     )
 
@@ -192,7 +198,7 @@ async def receive_task_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["pending_chat_id"] = update.effective_chat.id
 
     await update.message.reply_text(
-        f"📝 *{text}*\n\nВыбери приоритет:",
+        f"📝 *{escape_md(text)}*\n\nВыбери приоритет:",
         parse_mode="Markdown",
         reply_markup=PRIORITY_KEYBOARD
     )
@@ -216,7 +222,7 @@ async def handle_priority_callback(update: Update, context: ContextTypes.DEFAULT
     name = PRIORITY_NAMES[priority]
 
     await query.edit_message_text(
-        f"📝 *{text}*\n{e} {name}\n\nВыбери категорию:",
+        f"📝 *{escape_md(text)}*\n{e} {name}\n\nВыбери категорию:",
         parse_mode="Markdown",
         reply_markup=CATEGORY_KEYBOARD
     )
@@ -311,7 +317,7 @@ def build_by_priority(tasks, for_vlad=False):
     for t in sorted_tasks[:20]:
         e = priority_emoji(t)
         waiting = " ⏳" if is_waiting(t) else ""
-        lines.append(f"{e} {t['content']}{waiting}")
+        lines.append(f"{e} {escape_md(t['content'])}{waiting}")
         keyboard.append(task_buttons(t, for_vlad=for_vlad))
 
     markup = InlineKeyboardMarkup(keyboard) if keyboard else None
@@ -327,12 +333,12 @@ def build_by_project(tasks, project_names):
     lines = ["🗂 *По проектам:*\n"]
     keyboard = []
     for project_id, items in by_project.items():
-        name = project_names.get(project_id, "Без проекта")
+        name = escape_md(project_names.get(project_id, "Без проекта"))
         lines.append(f"\n*{name}*")
         for t in sorted(items, key=lambda t: -t.get("priority", 1))[:10]:
             e = priority_emoji(t)
             waiting = " ⏳" if is_waiting(t) else ""
-            lines.append(f"{e} {t['content']}{waiting}")
+            lines.append(f"{e} {escape_md(t['content'])}{waiting}")
             keyboard.append(task_buttons(t))
 
     markup = InlineKeyboardMarkup(keyboard) if keyboard else None
@@ -365,7 +371,7 @@ async def btn_task_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for t in sorted(items, key=lambda t: -t.get("priority", 1)):
                     e = priority_emoji(t)
                     waiting = " ⏳" if is_waiting(t) else ""
-                    lines.append(f"{e} {t['content']}{waiting}")
+                    lines.append(f"{e} {escape_md(t['content'])}{waiting}")
             text = "\n".join(lines)
             markup = None
 
@@ -438,7 +444,7 @@ async def btn_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
         e = priority_emoji(t)
         due = t.get("due") or {}
         due_text = f" — {due['date']}" if due.get("date") else ""
-        lines.append(f"{e} {t['content']}{due_text}")
+        lines.append(f"{e} {escape_md(t['content'])}{due_text}")
         keyboard.append([InlineKeyboardButton(f"✅ Закрыть: {t['content'][:40]}", callback_data=f"done_{t['id']}")])
 
     markup = InlineKeyboardMarkup(keyboard)
