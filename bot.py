@@ -41,7 +41,8 @@ VLAD_HELP = (
     "📌 *Команды:*\n"
     "➕ Добавить задачу — кнопка или просто напиши текст\n"
     "🎙 Голосовое — автоматически станет задачей\n"
-    "📋 Список задач — все активные задачи"
+    "📋 Список задач — все активные задачи\n"
+    "⏳ Ожидают ответ — задачи, которые Виктория ждёт от тебя"
 )
 
 VICTORIA_HELP = (
@@ -56,6 +57,7 @@ VICTORIA_HELP = (
 VLAD_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("➕ Добавить задачу"), KeyboardButton("📋 Список задач")],
+        [KeyboardButton("⏳ Ожидают ответ")],
     ],
     resize_keyboard=True,
     input_field_placeholder="Или напиши задачу текстом..."
@@ -428,19 +430,21 @@ async def btn_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     waiting = [t for t in tasks if is_waiting(t)]
 
     if not waiting:
-        await update.message.reply_text("⏳ Нет задач в ожидании ответа от Виктории.")
+        await update.message.reply_text("⏳ Нет задач, ожидающих ответа.")
         return
 
-    lines = ["⏳ *Ожидаем ответа от Влада:*\n"]
+    lines = ["⏳ *Ожидают ответа:*\n"]
     keyboard = []
     for t in sorted(waiting, key=lambda t: -t.get("priority", 1)):
         e = priority_emoji(t)
         due = t.get("due") or {}
         due_text = f" — {due['date']}" if due.get("date") else ""
         lines.append(f"{e} {escape_md(t['content'])}{due_text}")
-        keyboard.append([InlineKeyboardButton(f"✅ Закрыть: {t['content'][:40]}", callback_data=f"done_{t['id']}")])
+        if is_vlad(update):
+            # Влад видит кнопку "Закрыть" — чтобы снять метку ожидания
+            keyboard.append([InlineKeyboardButton(f"✅ Закрыть: {t['content'][:35]}", callback_data=f"done_{t['id']}")])
 
-    markup = InlineKeyboardMarkup(keyboard)
+    markup = InlineKeyboardMarkup(keyboard) if keyboard else None
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=markup)
 
 
