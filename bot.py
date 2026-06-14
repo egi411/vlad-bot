@@ -11,7 +11,7 @@ from telegram.ext import (
 )
 
 from config import TELEGRAM_TOKEN
-from todoist_client import create_task, get_all_active_tasks, get_projects, complete_task
+import db
 from voice import transcribe_voice, parse_due_date, detect_task_meta
 from reports import build_morning_report, build_evening_report
 from users import get_vlad_id, get_victoria_id, save_vlad_id, save_victoria_id
@@ -19,21 +19,18 @@ from users import get_vlad_id, get_victoria_id, save_vlad_id, save_victoria_id
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Todoist priority: 4=p1(срочно), 3=p2(важно), 2=p3(обычно), 1=p4(условно)
 PRIORITY_EMOJI = {4: "🔴", 3: "🟠", 2: "🟡", 1: "⚪"}
 PRIORITY_NAMES = {4: "Срочно", 3: "Важно", 2: "Обычно", 1: "Условно"}
-WAITING_LABEL = "zhdu_otveta"
+WAITING_LABEL = "zhdu_otveta"  # kept for compatibility — status field handles logic now
 
 ADDING_TASK = 1
 
-# Кнопки меню — не должны создавать задачу внутри ConversationHandler
 MENU_BUTTONS = {
     "📋 Список задач", "📊 По приоритету", "🗂 По проектам",
     "Ожидают ответ", "🔔 Уведомления включены", "🔕 Уведомления отключены",
     "➕ Добавить задачу",
 }
 
-# Уведомления Victoria — хранится в памяти (сбрасывается при рестарте)
 notifications_on: set[int] = set()
 
 VLAD_HELP = (
@@ -63,7 +60,6 @@ VLAD_KEYBOARD = ReplyKeyboardMarkup(
     input_field_placeholder="Или напиши задачу текстом..."
 )
 
-
 CANCEL_KEYBOARD = ReplyKeyboardMarkup(
     [[KeyboardButton("❌ Отмена")]],
     resize_keyboard=True
@@ -80,7 +76,6 @@ PRIORITY_KEYBOARD = InlineKeyboardMarkup([
     ],
 ])
 
-
 CATEGORY_KEYBOARD = InlineKeyboardMarkup([
     [
         InlineKeyboardButton("👔 Клиенты", callback_data="cat_VLAD BYKOV"),
@@ -91,6 +86,20 @@ CATEGORY_KEYBOARD = InlineKeyboardMarkup([
         InlineKeyboardButton("👤 Личное", callback_data="cat_Личное"),
     ],
 ])
+
+CATEGORY_EMOJI = {
+    "VLAD BYKOV": "👔",
+    "Контент": "🎬",
+    "Restoria": "🏪",
+    "Личное": "👤",
+}
+
+CATEGORY_DISPLAY = {
+    "VLAD BYKOV": "👔 Клиенты",
+    "Контент": "🎬 Контент",
+    "Restoria": "🏪 Restoria",
+    "Личное": "👤 Личное",
+}
 
 
 def _victoria_keyboard(chat_id: int) -> ReplyKeyboardMarkup:
@@ -106,11 +115,7 @@ def _victoria_keyboard(chat_id: int) -> ReplyKeyboardMarkup:
 
 
 def priority_emoji(task):
-    return PRIORITY_EMOJI.get(task.get("priority", 1), "🟡")
-
-
-def is_waiting(task):
-    return WAITING_LABEL in task.get("labels", [])
+    return PRIORITY_EMOJI.get(task.get("priority", 2), "🟡")
 
 
 def escape_md(text: str) -> str:
@@ -221,13 +226,6 @@ async def handle_priority_callback(update: Update, context: ContextTypes.DEFAULT
 
 
 # ── Выбор категории (callback) ───────────────────────────
-CATEGORY_EMOJI = {
-    "VLAD BYKOV": "👔",
-    "Контент": "🎬",
-    "Restoria": "🏪",
-    "Личное": "👤",
-}
-
 async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -237,16 +235,17 @@ async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT
 
     text = context.user_data.get("pending_task", "")
     priority = context.user_data.get("pending_priority", 2)
+    sender = context.user_data.get("pending_sender", "Влад")
+    due = context.user_data.get("pending_due")
+
     e = PRIORITY_EMOJI[priority]
     cat_e = CATEGORY_EMOJI.get(project_name, "📁")
     display_name = "Клиенты" if project_name == "VLAD BYKOV" else project_name
 
-    due = context.user_data.get("pending_due")
-    create_task(content=text, due_string=due, priority=priority, project_name=project_name)
+    db.create_task(content=text, priority=priority, project=project_name, sender=sender, due=due)
     due_text = f" (срок: {due})" if due else ""
     await query.edit_message_text(f"✅ Задача добавлена!\n{e} {text}{due_text}\n{cat_e} {display_name}")
 
-    sender = context.user_data.get("pending_sender", "Влад")
     if sender == "Влад":
         await query.message.reply_text("Что дальше?" + VLAD_HELP, parse_mode="Markdown", reply_markup=VLAD_KEYBOARD)
         await notify_victoria(query.get_bot(), text, priority, due, sender="Влад")
@@ -257,17 +256,65 @@ async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT
     context.user_data.clear()
 
 
+# ── task_buttons helper ───────────────────────────────────
+def task_buttons(t):
+    if t.get("status") == "waiting":
+        return []
+    name = t["content"][:40]
+    return [InlineKeyboardButton(f"⏳ Жду ответа: {name}", callback_data=f"wait_{t['id']}")]
+
+
+# ── Построение списка задач ───────────────────────────────
+def build_by_priority(tasks):
+    sorted_tasks = sorted(tasks, key=lambda t: -t.get("priority", 1))
+
+    lines = ["📊 *По приоритету:*\n"]
+    keyboard = []
+    for t in sorted_tasks[:20]:
+        e = priority_emoji(t)
+        waiting = " ⏳" if t.get("status") == "waiting" else ""
+        lines.append(f"{e} {escape_md(t['content'])}{waiting}")
+        buttons = task_buttons(t)
+        if buttons:
+            keyboard.append(buttons)
+
+    markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+    return "\n".join(lines), markup
+
+
+def build_by_project(tasks):
+    from collections import defaultdict
+    by_project = defaultdict(list)
+    for t in tasks:
+        by_project[t.get("project", "Без проекта")].append(t)
+
+    lines = ["🗂 *По проектам:*\n"]
+    keyboard = []
+    for project_name, items in by_project.items():
+        name = escape_md(project_name)
+        lines.append(f"\n*{name}*")
+        for t in sorted(items, key=lambda t: -t.get("priority", 1))[:10]:
+            e = priority_emoji(t)
+            waiting = " ⏳" if t.get("status") == "waiting" else ""
+            lines.append(f"{e} {escape_md(t['content'])}{waiting}")
+            buttons = task_buttons(t)
+            if buttons:
+                keyboard.append(buttons)
+
+    markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+    return "\n".join(lines), markup
+
+
 # ── "Жду ответа" — Виктория выполнила, ждёт Влада ───────
 async def handle_wait_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("⏳ Отмечено!")
 
-    task_id = query.data.replace("wait_", "")
+    task_id = int(query.data.replace("wait_", ""))
     try:
-        from todoist_client import add_label_to_task
-        add_label_to_task(task_id, WAITING_LABEL)
+        db.mark_waiting(task_id)
 
-        tasks = get_all_active_tasks()
+        tasks = db.get_active_tasks()
         if tasks:
             text, markup = build_by_priority(tasks)
             if len(text) > 4000:
@@ -285,58 +332,10 @@ async def handle_wait_done_callback(update: Update, context: ContextTypes.DEFAUL
         await query.answer("❌ Ошибка", show_alert=True)
 
 
-# ── Построение списка задач ───────────────────────────────
-def task_buttons(t):
-    if is_waiting(t):
-        return []  # Already marked — no button needed
-    name = t["content"][:40]
-    return [InlineKeyboardButton(f"⏳ Жду ответа: {name}", callback_data=f"wait_{t['id']}")]
-
-
-def build_by_priority(tasks):
-    sorted_tasks = sorted(tasks, key=lambda t: -t.get("priority", 1))
-
-    lines = ["📊 *По приоритету:*\n"]
-    keyboard = []
-    for t in sorted_tasks[:20]:
-        e = priority_emoji(t)
-        waiting = " ⏳" if is_waiting(t) else ""
-        lines.append(f"{e} {escape_md(t['content'])}{waiting}")
-        buttons = task_buttons(t)
-        if buttons:
-            keyboard.append(buttons)
-
-    markup = InlineKeyboardMarkup(keyboard) if keyboard else None
-    return "\n".join(lines), markup
-
-
-def build_by_project(tasks, project_names):
-    from collections import defaultdict
-    by_project = defaultdict(list)
-    for t in tasks:
-        by_project[t.get("project_id", "")].append(t)
-
-    lines = ["🗂 *По проектам:*\n"]
-    keyboard = []
-    for project_id, items in by_project.items():
-        name = escape_md(project_names.get(project_id, "Без проекта"))
-        lines.append(f"\n*{name}*")
-        for t in sorted(items, key=lambda t: -t.get("priority", 1))[:10]:
-            e = priority_emoji(t)
-            waiting = " ⏳" if is_waiting(t) else ""
-            lines.append(f"{e} {escape_md(t['content'])}{waiting}")
-            buttons = task_buttons(t)
-            if buttons:
-                keyboard.append(buttons)
-
-    markup = InlineKeyboardMarkup(keyboard) if keyboard else None
-    return "\n".join(lines), markup
-
-
 # ── Кнопки списка задач ───────────────────────────────────
 async def btn_task_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        tasks = get_all_active_tasks()
+        tasks = db.get_active_tasks()
         logger.info(f"Tasks fetched: {len(tasks)}")
 
         if not tasks:
@@ -349,16 +348,15 @@ async def btn_task_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from collections import defaultdict
             by_project = defaultdict(list)
             for t in tasks:
-                by_project[t.get("project_id", "")].append(t)
+                by_project[t.get("project", "Без проекта")].append(t)
 
-            project_names = {p["id"]: p["name"] for p in get_projects()}
             lines = ["📋 *Список задач:*\n"]
-            for project_id, items in by_project.items():
-                name = escape_md(project_names.get(project_id, "Без проекта"))
+            for project_name, items in by_project.items():
+                name = escape_md(project_name)
                 lines.append(f"\n*{name}*")
                 for t in sorted(items, key=lambda t: -t.get("priority", 1)):
                     e = priority_emoji(t)
-                    waiting = " ⏳" if is_waiting(t) else ""
+                    waiting = " ⏳" if t.get("status") == "waiting" else ""
                     lines.append(f"{e} {escape_md(t['content'])}{waiting}")
             text = "\n".join(lines)
             markup = None
@@ -372,7 +370,7 @@ async def btn_task_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def btn_view_by_priority(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tasks = get_all_active_tasks()
+    tasks = db.get_active_tasks()
     if not tasks:
         await update.message.reply_text("Нет активных задач 🎉")
         return
@@ -383,12 +381,11 @@ async def btn_view_by_priority(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def btn_view_by_project(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tasks = get_all_active_tasks()
+    tasks = db.get_active_tasks()
     if not tasks:
         await update.message.reply_text("Нет активных задач 🎉")
         return
-    project_names = {p["id"]: p["name"] for p in get_projects()}
-    text, markup = build_by_project(tasks, project_names)
+    text, markup = build_by_project(tasks)
     if len(text) > 4000:
         text = text[:4000] + "\n..."
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
@@ -399,9 +396,9 @@ async def handle_complete_callback(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     await query.answer("✅ Выполнено!")
 
-    task_id = query.data.replace("done_", "")
+    task_id = int(query.data.replace("done_", ""))
     try:
-        complete_task(task_id)
+        db.mark_done(task_id)
         await query.edit_message_text("✅ Задача закрыта.")
     except Exception as e:
         logger.error(f"Complete task error: {e}")
@@ -410,12 +407,8 @@ async def handle_complete_callback(update: Update, context: ContextTypes.DEFAULT
 
 # ── Ожидают ответ (Влад) ─────────────────────────────────
 async def btn_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tasks = get_all_active_tasks()
-    logger.info(f"btn_waiting: total tasks={len(tasks)}")
-    for t in tasks:
-        logger.info(f"  task id={t['id']} labels={t.get('labels')} content={t['content'][:40]}")
-    waiting = [t for t in tasks if is_waiting(t)]
-    logger.info(f"btn_waiting: waiting tasks={len(waiting)}, WAITING_LABEL={repr(WAITING_LABEL)}")
+    waiting = db.get_waiting_tasks()
+    logger.info(f"btn_waiting: waiting tasks={len(waiting)}")
 
     if not waiting:
         await update.message.reply_text("⏳ Нет задач, ожидающих ответа.")
@@ -425,11 +418,9 @@ async def btn_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     for t in sorted(waiting, key=lambda t: -t.get("priority", 1)):
         e = priority_emoji(t)
-        due = t.get("due") or {}
-        due_text = f" — {due['date']}" if due.get("date") else ""
+        due_text = f" — {t['due']}" if t.get("due") else ""
         lines.append(f"{e} {escape_md(t['content'])}{due_text}")
         if is_vlad(update):
-            # Влад видит кнопку "Закрыть" — чтобы снять метку ожидания
             keyboard.append([InlineKeyboardButton(f"✅ Закрыть: {t['content'][:35]}", callback_data=f"done_{t['id']}")])
 
     markup = InlineKeyboardMarkup(keyboard) if keyboard else None
@@ -454,14 +445,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ── Голос ────────────────────────────────────────────────
-CATEGORY_DISPLAY = {
-    "VLAD BYKOV": "👔 Клиенты",
-    "Контент": "🎬 Контент",
-    "Restoria": "🏪 Restoria",
-    "Личное": "👤 Личное",
-}
-
-
 def _voice_confirm_keyboard():
     return InlineKeyboardMarkup([
         [
@@ -521,7 +504,7 @@ async def handle_voice_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
     due = context.user_data.get("pending_due")
     sender = context.user_data.get("pending_sender", "Влад")
 
-    create_task(content=text, due_string=due, priority=priority, project_name=category)
+    db.create_task(content=text, priority=priority, project=category, sender=sender, due=due)
 
     e = PRIORITY_EMOJI[priority]
     cname = CATEGORY_DISPLAY.get(category, category)
@@ -591,6 +574,8 @@ async def send_evening_report(context: ContextTypes.DEFAULT_TYPE):
 
 # ── Запуск ───────────────────────────────────────────────
 async def main():
+    db.init_db()
+
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     conv = ConversationHandler(

@@ -1,5 +1,5 @@
 from datetime import datetime
-from todoist_client import get_tasks_today, get_all_active_tasks, get_completed_today
+import db
 
 
 def _esc(text: str) -> str:
@@ -9,15 +9,13 @@ def _esc(text: str) -> str:
 
 
 def build_morning_report() -> str:
-    tasks = get_tasks_today()
+    tasks = db.get_active_tasks()
     today = datetime.now().strftime("%Y-%m-%d")
 
-    urgent = [t for t in tasks if "🔴_Срочно" in t.get("labels", [])]
-    overdue = [t for t in tasks if t.get("due") and t["due"].get("date", "") < today]
+    urgent = [t for t in tasks if t.get("priority") == 4]
+    overdue = [t for t in tasks if t.get("due") and t["due"] < today]
 
-    top5 = sorted(tasks, key=lambda t: (
-        0 if "🔴_Срочно" in t.get("labels", []) else 1
-    ))[:5]
+    top5 = sorted(tasks, key=lambda t: -t.get("priority", 1))[:5]
 
     lines = ["☀️ *Доброе утро, Влад!*\n"]
     lines.append(f"🔴 Срочных задач: *{len(urgent)}*")
@@ -34,13 +32,12 @@ def build_morning_report() -> str:
 
 
 def build_evening_report() -> str:
-    completed = get_completed_today()
-    active = get_all_active_tasks()
+    completed = db.get_completed_today()
+    active = db.get_active_tasks()
     today = datetime.now().strftime("%Y-%m-%d")
 
-    waiting = [t for t in active if "zhdu_otveta" in t.get("labels", [])]
-    overdue = [t for t in active if t.get("due") and t["due"].get("date", "") < today]
-    in_progress = [t for t in active if "🟡_В_работе" in t.get("labels", [])]
+    waiting = [t for t in active if t.get("status") == "waiting"]
+    overdue = [t for t in active if t.get("due") and t["due"] < today]
 
     lines = ["🌙 *Итоги дня*\n"]
 
@@ -48,13 +45,6 @@ def build_evening_report() -> str:
     if completed:
         for t in completed[:10]:
             lines.append(f"• {_esc(t.get('content', ''))}")
-    else:
-        lines.append("• —")
-
-    lines.append("\n📂 *Открыто:*")
-    if in_progress:
-        for t in in_progress[:5]:
-            lines.append(f"• {_esc(t['content'])}")
     else:
         lines.append("• —")
 
