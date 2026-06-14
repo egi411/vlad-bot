@@ -26,6 +26,16 @@ WAITING_LABEL = "⏳_Ожидаем_ответ"
 
 ADDING_TASK = 1
 
+# Кнопки меню — не должны создавать задачу внутри ConversationHandler
+MENU_BUTTONS = {
+    "📋 Список задач", "📊 По приоритету", "🗂 По проектам",
+    "⏳ Ожидают ответ", "🔔 Уведомления включены", "🔕 Уведомления отключены",
+    "➕ Добавить задачу",
+}
+
+# Уведомления Victoria — хранится в памяти (сбрасывается при рестарте)
+notifications_on: set[int] = set()
+
 VLAD_HELP = (
     "\n\n─────────────────\n"
     "📌 *Команды:*\n"
@@ -91,6 +101,18 @@ CATEGORY_KEYBOARD = InlineKeyboardMarkup([
 ])
 
 
+def _victoria_keyboard(chat_id: int) -> ReplyKeyboardMarkup:
+    notif_btn = "🔔 Уведомления включены" if chat_id in notifications_on else "🔕 Уведомления отключены"
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("➕ Добавить задачу"), KeyboardButton("📋 Список задач")],
+            [KeyboardButton("📊 По приоритету"), KeyboardButton("🗂 По проектам")],
+            [KeyboardButton(notif_btn)],
+        ],
+        resize_keyboard=True
+    )
+
+
 def priority_emoji(task):
     return PRIORITY_EMOJI.get(task.get("priority", 1), "🟡")
 
@@ -110,6 +132,8 @@ def is_victoria(update: Update) -> bool:
 async def notify_victoria(bot, task_content: str, priority: int, due: str | None, sender: str = "Влад"):
     victoria_id = get_victoria_id()
     if not victoria_id:
+        return
+    if victoria_id not in notifications_on:
         return
     due_text = f"\n📅 Срок: {due}" if due else ""
     e = PRIORITY_EMOJI.get(priority, "🟡")
@@ -145,7 +169,7 @@ async def start_victoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ *Привет, Виктория!*\n\n🆔 Твой chat ID: `{chat_id}`\n\nДобавь в Railway Variables как `VICTORIA_CHAT_ID`" + VICTORIA_HELP,
         parse_mode="Markdown",
-        reply_markup=VICTORIA_KEYBOARD
+        reply_markup=_victoria_keyboard(update.effective_chat.id)
     )
 
 
@@ -157,8 +181,8 @@ async def btn_add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_task_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    if text == "❌ Отмена":
-        keyboard = VLAD_KEYBOARD if is_vlad(update) else VICTORIA_KEYBOARD
+    if text == "❌ Отмена" or text in MENU_BUTTONS:
+        keyboard = VLAD_KEYBOARD if is_vlad(update) else _victoria_keyboard(update.effective_chat.id)
         await update.message.reply_text("Отменено.", reply_markup=keyboard)
         return ConversationHandler.END
 
@@ -231,7 +255,7 @@ async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT
         await query.message.reply_text("Что дальше?" + VLAD_HELP, parse_mode="Markdown", reply_markup=VLAD_KEYBOARD)
         await notify_victoria(query.get_bot(), text, priority, due, sender="Влад")
     else:
-        await query.message.reply_text("Что дальше?" + VICTORIA_HELP, parse_mode="Markdown", reply_markup=VICTORIA_KEYBOARD)
+        await query.message.reply_text("Что дальше?" + VICTORIA_HELP, parse_mode="Markdown", reply_markup=_victoria_keyboard(query.from_user.id))
         await notify_victoria(query.get_bot(), text, priority, due, sender="Виктория")
         await notify_vlad(query.get_bot(), f"📌 *Виктория добавила задачу:*\n\n{e} {text}{due_text}\n{cat_e} {display_name}")
     context.user_data.clear()
@@ -476,12 +500,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ── Уведомления (заглушка) ────────────────────────────────
+# ── Уведомления — toggle ─────────────────────────────────
 async def btn_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🔔 Уведомления активны — ты получаешь сообщения о каждой новой задаче от Влада.",
-        reply_markup=VICTORIA_KEYBOARD
-    )
+    chat_id = update.effective_chat.id
+    if chat_id in notifications_on:
+        notifications_on.discard(chat_id)
+        text = "🔕 Уведомления *отключены*. Новые задачи от Влада приходить не будут."
+    else:
+        notifications_on.add(chat_id)
+        text = "🔔 Уведомления *включены*. Ты будешь получать сообщения о каждой новой задаче."
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=_victoria_keyboard(chat_id))
 
 
 # ── Отчёты ───────────────────────────────────────────────
@@ -516,7 +544,10 @@ async def main():
     app.add_handler(MessageHandler(filters.Regex("^📊 По приоритету$"), btn_view_by_priority))
     app.add_handler(MessageHandler(filters.Regex("^🗂 По проектам$"), btn_view_by_project))
     app.add_handler(MessageHandler(filters.Regex("^⏳ Ожидают ответ$"), btn_waiting))
-    app.add_handler(MessageHandler(filters.Regex("^🔔 Уведомления включены$"), btn_notifications))
+    app.add_handler(MessageHandler(
+        filters.Regex("^(🔔 Уведомления включены|🔕 Уведомления отключены)$"),
+        btn_notifications
+    ))
     app.add_handler(CallbackQueryHandler(handle_priority_callback, pattern="^priority_"))
     app.add_handler(CallbackQueryHandler(handle_category_callback, pattern="^cat_"))
     app.add_handler(CallbackQueryHandler(handle_wait_done_callback, pattern="^wait_"))
@@ -556,7 +587,7 @@ async def _broadcast_startup(bot):
                 chat_id=victoria_id,
                 text="👋 *VB Assistant на связи!*" + VICTORIA_HELP,
                 parse_mode="Markdown",
-                reply_markup=VICTORIA_KEYBOARD
+                reply_markup=_victoria_keyboard(victoria_id)
             )
         except Exception as e:
             logger.error(f"Broadcast to Victoria failed: {e}")
