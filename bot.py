@@ -86,6 +86,17 @@ WAITING_KEYBOARD = InlineKeyboardMarkup([
     ]
 ])
 
+CATEGORY_KEYBOARD = InlineKeyboardMarkup([
+    [
+        InlineKeyboardButton("👔 Клиенты", callback_data="cat_VLAD BYKOV"),
+        InlineKeyboardButton("🎬 Контент", callback_data="cat_Контент"),
+    ],
+    [
+        InlineKeyboardButton("🏪 Restoria", callback_data="cat_Restoria"),
+        InlineKeyboardButton("👤 Личное", callback_data="cat_Личное"),
+    ],
+])
+
 
 def priority_emoji(task):
     return PRIORITY_EMOJI.get(task.get("priority", 1), "🟡")
@@ -187,26 +198,51 @@ async def handle_priority_callback(update: Update, context: ContextTypes.DEFAULT
     e = PRIORITY_EMOJI[priority]
     name = PRIORITY_NAMES[priority]
 
+    await query.edit_message_text(
+        f"📝 *{text}*\n{e} {name}\n\nВыбери категорию:",
+        parse_mode="Markdown",
+        reply_markup=CATEGORY_KEYBOARD
+    )
+
+
+# ── Выбор категории (callback) ───────────────────────────
+CATEGORY_EMOJI = {
+    "VLAD BYKOV": "👔",
+    "Контент": "🎬",
+    "Restoria": "🏪",
+    "Личное": "👤",
+}
+
+async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    project_name = query.data.replace("cat_", "")
+    context.user_data["pending_project"] = project_name
+
+    text = context.user_data.get("pending_task", "")
+    priority = context.user_data.get("pending_priority", 2)
+    e = PRIORITY_EMOJI[priority]
+    cat_e = CATEGORY_EMOJI.get(project_name, "📁")
+    display_name = "Клиенты" if project_name == "VLAD BYKOV" else project_name
+
     vlad_id = get_vlad_id()
     is_vlad_user = query.from_user.id == vlad_id
 
     if is_vlad_user:
-        # Влад: спрашиваем про "Ожидаем ответ"
         await query.edit_message_text(
-            f"📝 *{text}*\n{e} {name}\n\nОтметить «⏳ Ожидаем ответ» от Виктории?",
+            f"📝 *{text}*\n{e} {PRIORITY_NAMES[priority]} · {cat_e} {display_name}\n\nОтметить «⏳ Ожидаем ответ» от Виктории?",
             parse_mode="Markdown",
             reply_markup=WAITING_KEYBOARD
         )
     else:
-        # Виктория: сразу создаём задачу без вопроса про ожидание
         due = context.user_data.get("pending_due")
-        sender = context.user_data.get("pending_sender", "Виктория")
-        create_task(content=text, due_string=due, priority=priority)
+        create_task(content=text, due_string=due, priority=priority, project_name=project_name)
         due_text = f" (срок: {due})" if due else ""
-        await query.edit_message_text(f"✅ Задача добавлена!\n{e} {text}{due_text}")
+        await query.edit_message_text(f"✅ Задача добавлена!\n{e} {text}{due_text}\n{cat_e} {display_name}")
         await query.message.reply_text("Что дальше?" + VICTORIA_HELP, parse_mode="Markdown", reply_markup=VICTORIA_KEYBOARD)
-        await notify_victoria(query.get_bot(), text, str(priority), due, sender=sender)
-        await notify_vlad(query.get_bot(), f"📌 *Виктория добавила задачу:*\n\n{e} {text}{due_text}")
+        await notify_victoria(query.get_bot(), text, priority, due, sender="Виктория")
+        await notify_vlad(query.get_bot(), f"📌 *Виктория добавила задачу:*\n\n{e} {text}{due_text}\n{cat_e} {display_name}")
         context.user_data.clear()
 
 
@@ -218,17 +254,20 @@ async def handle_waiting_callback(update: Update, context: ContextTypes.DEFAULT_
     text = context.user_data.get("pending_task", "")
     due = context.user_data.get("pending_due")
     priority = context.user_data.get("pending_priority", 2)
+    project_name = context.user_data.get("pending_project", "VLAD BYKOV")
     waiting = query.data == "waiting_yes"
 
     labels = [WAITING_LABEL] if waiting else []
-    create_task(content=text, due_string=due, priority=priority, labels=labels)
+    create_task(content=text, due_string=due, priority=priority, labels=labels, project_name=project_name)
 
     e = PRIORITY_EMOJI[priority]
+    cat_e = CATEGORY_EMOJI.get(project_name, "📁")
+    display_name = "Клиенты" if project_name == "VLAD BYKOV" else project_name
     due_text = f" (срок: {due})" if due else ""
     waiting_text = "\n⏳ Отмечено: Ожидаем ответ" if waiting else ""
-    await query.edit_message_text(f"✅ Задача добавлена!\n{e} {text}{due_text}{waiting_text}")
+    await query.edit_message_text(f"✅ Задача добавлена!\n{e} {text}{due_text}\n{cat_e} {display_name}{waiting_text}")
     await query.message.reply_text("Что дальше?" + VLAD_HELP, parse_mode="Markdown", reply_markup=VLAD_KEYBOARD)
-    await notify_victoria(query.get_bot(), text, str(priority), due, sender="Влад")
+    await notify_victoria(query.get_bot(), text, priority, due, sender="Влад")
     context.user_data.clear()
 
 
@@ -474,6 +513,7 @@ async def main():
     app.add_handler(MessageHandler(filters.Regex("^⏳ Ожидают ответ$"), btn_waiting))
     app.add_handler(MessageHandler(filters.Regex("^🔔 Уведомления включены$"), btn_notifications))
     app.add_handler(CallbackQueryHandler(handle_priority_callback, pattern="^priority_"))
+    app.add_handler(CallbackQueryHandler(handle_category_callback, pattern="^cat_"))
     app.add_handler(CallbackQueryHandler(handle_waiting_callback, pattern="^waiting_"))
     app.add_handler(CallbackQueryHandler(handle_complete_callback, pattern="^done_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
