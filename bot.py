@@ -12,7 +12,7 @@ from telegram.ext import (
 
 from config import TELEGRAM_TOKEN
 from todoist_client import create_task, get_all_active_tasks, get_projects, complete_task
-from voice import transcribe_voice, parse_due_date
+from voice import transcribe_voice, parse_due_date, detect_task_meta
 from reports import build_morning_report, build_evening_report
 from users import get_vlad_id, get_victoria_id, save_vlad_id, save_victoria_id
 
@@ -464,8 +464,25 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ── Голос ────────────────────────────────────────────────
+CATEGORY_DISPLAY = {
+    "VLAD BYKOV": "👔 Клиенты",
+    "Контент": "🎬 Контент",
+    "Restoria": "🏪 Restoria",
+    "Личное": "👤 Личное",
+}
+
+
+def _voice_confirm_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Создать задачу", callback_data="voice_confirm"),
+            InlineKeyboardButton("✏️ Изменить", callback_data="voice_edit"),
+        ]
+    ])
+
+
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎙 Расшифровываю...")
+    msg = await update.message.reply_text("🎙 Расшифровываю...")
     file = await context.bot.get_file(update.message.voice.file_id)
     with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
         await file.download_to_drive(tmp.name)
@@ -473,20 +490,73 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         text = transcribe_voice(tmp_path)
         os.unlink(tmp_path)
+
+        await msg.edit_text("🤖 Определяю приоритет и категорию...")
+        meta = detect_task_meta(text)
+        priority = meta.get("priority", 2)
+        category = meta.get("category", "VLAD BYKOV")
         due = parse_due_date(text)
 
         context.user_data["pending_task"] = text
         context.user_data["pending_due"] = due
-        context.user_data["pending_sender"] = "Влад"
+        context.user_data["pending_priority"] = priority
+        context.user_data["pending_project"] = category
+        context.user_data["pending_sender"] = "Влад" if is_vlad(update) else "Виктория"
+        context.user_data["pending_chat_id"] = update.effective_chat.id
 
-        await update.message.reply_text(
-            f"🎙 *Распознано:* {text}\n\nВыбери приоритет:",
+        e = PRIORITY_EMOJI[priority]
+        pname = PRIORITY_NAMES[priority]
+        cname = CATEGORY_DISPLAY.get(category, category)
+        due_line = f"\n📅 {due}" if due else ""
+
+        await msg.edit_text(
+            f"🎙 *{escape_md(text)}*\n\n"
+            f"{e} {pname}  •  {cname}{due_line}\n\n"
+            f"Создать задачу?",
             parse_mode="Markdown",
-            reply_markup=PRIORITY_KEYBOARD
+            reply_markup=_voice_confirm_keyboard()
         )
     except Exception as e:
         logger.error(f"Voice error: {e}")
-        await update.message.reply_text("❌ Не удалось расшифровать голосовое.")
+        await msg.edit_text("❌ Не удалось расшифровать голосовое.")
+
+
+async def handle_voice_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    text = context.user_data.get("pending_task", "")
+    priority = context.user_data.get("pending_priority", 2)
+    category = context.user_data.get("pending_project", "VLAD BYKOV")
+    due = context.user_data.get("pending_due")
+    sender = context.user_data.get("pending_sender", "Влад")
+
+    create_task(content=text, due_string=due, priority=priority, project_name=category)
+
+    e = PRIORITY_EMOJI[priority]
+    cname = CATEGORY_DISPLAY.get(category, category)
+    due_text = f" (срок: {due})" if due else ""
+    await query.edit_message_text(f"✅ Задача создана!\n{e} {text}{due_text}\n{cname}")
+
+    vlad_id = get_vlad_id()
+    if query.from_user.id == vlad_id:
+        await query.message.reply_text("Что дальше?" + VLAD_HELP, parse_mode="Markdown", reply_markup=VLAD_KEYBOARD)
+        await notify_victoria(query.get_bot(), text, priority, due, sender=sender)
+    else:
+        await query.message.reply_text("Что дальше?" + VICTORIA_HELP, parse_mode="Markdown", reply_markup=_victoria_keyboard(query.from_user.id))
+        await notify_vlad(query.get_bot(), f"📌 *Виктория добавила задачу:*\n\n{e} {escape_md(text)}{due_text}\n{cname}")
+    context.user_data.clear()
+
+
+async def handle_voice_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    text = context.user_data.get("pending_task", "")
+    await query.edit_message_text(
+        f"📝 *{escape_md(text)}*\n\nВыбери приоритет вручную:",
+        parse_mode="Markdown",
+        reply_markup=PRIORITY_KEYBOARD
+    )
 
 
 # ── Фото ─────────────────────────────────────────────────
@@ -553,6 +623,8 @@ async def main():
         filters.Regex("^(🔔 Уведомления включены|🔕 Уведомления отключены)$"),
         btn_notifications
     ))
+    app.add_handler(CallbackQueryHandler(handle_voice_confirm, pattern="^voice_confirm$"))
+    app.add_handler(CallbackQueryHandler(handle_voice_edit, pattern="^voice_edit$"))
     app.add_handler(CallbackQueryHandler(handle_priority_callback, pattern="^priority_"))
     app.add_handler(CallbackQueryHandler(handle_category_callback, pattern="^cat_"))
     app.add_handler(CallbackQueryHandler(handle_wait_done_callback, pattern="^wait_"))
