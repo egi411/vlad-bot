@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Todoist priority: 4=p1(срочно), 3=p2(важно), 2=p3(обычно), 1=p4(условно)
 PRIORITY_EMOJI = {4: "🔴", 3: "🟠", 2: "🟡", 1: "⚪"}
 PRIORITY_NAMES = {4: "Срочно", 3: "Важно", 2: "Обычно", 1: "Условно"}
-WAITING_LABEL = "⏳_Ожидаем_ответ"
+WAITING_LABEL = "zhdu_otveta"
 
 ADDING_TASK = 1
 
@@ -63,14 +63,6 @@ VLAD_KEYBOARD = ReplyKeyboardMarkup(
     input_field_placeholder="Или напиши задачу текстом..."
 )
 
-VICTORIA_KEYBOARD = ReplyKeyboardMarkup(
-    [
-        [KeyboardButton("➕ Добавить задачу"), KeyboardButton("📋 Список задач")],
-        [KeyboardButton("📊 По приоритету"), KeyboardButton("🗂 По проектам")],
-        [KeyboardButton("🔔 Уведомления включены")],
-    ],
-    resize_keyboard=True
-)
 
 CANCEL_KEYBOARD = ReplyKeyboardMarkup(
     [[KeyboardButton("❌ Отмена")]],
@@ -275,7 +267,14 @@ async def handle_wait_done_callback(update: Update, context: ContextTypes.DEFAUL
         from todoist_client import add_label_to_task
         add_label_to_task(task_id, WAITING_LABEL)
 
-        await query.edit_message_text("⏳ Отмечено — ждёшь ответа от Влада.")
+        tasks = get_all_active_tasks()
+        if tasks:
+            text, markup = build_by_priority(tasks)
+            if len(text) > 4000:
+                text = text[:4000] + "\n..."
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+        else:
+            await query.edit_message_text("🎉 Все задачи выполнены!")
 
         await notify_vlad(
             query.get_bot(),
@@ -288,6 +287,8 @@ async def handle_wait_done_callback(update: Update, context: ContextTypes.DEFAUL
 
 # ── Построение списка задач ───────────────────────────────
 def task_buttons(t):
+    if is_waiting(t):
+        return []  # Already marked — no button needed
     name = t["content"][:40]
     return [InlineKeyboardButton(f"⏳ Жду ответа: {name}", callback_data=f"wait_{t['id']}")]
 
@@ -301,7 +302,9 @@ def build_by_priority(tasks):
         e = priority_emoji(t)
         waiting = " ⏳" if is_waiting(t) else ""
         lines.append(f"{e} {escape_md(t['content'])}{waiting}")
-        keyboard.append(task_buttons(t))
+        buttons = task_buttons(t)
+        if buttons:
+            keyboard.append(buttons)
 
     markup = InlineKeyboardMarkup(keyboard) if keyboard else None
     return "\n".join(lines), markup
@@ -322,7 +325,9 @@ def build_by_project(tasks, project_names):
             e = priority_emoji(t)
             waiting = " ⏳" if is_waiting(t) else ""
             lines.append(f"{e} {escape_md(t['content'])}{waiting}")
-            keyboard.append(task_buttons(t))
+            buttons = task_buttons(t)
+            if buttons:
+                keyboard.append(buttons)
 
     markup = InlineKeyboardMarkup(keyboard) if keyboard else None
     return "\n".join(lines), markup
@@ -550,10 +555,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["pending_task"] = caption
     context.user_data["pending_due"] = due
-    context.user_data["pending_sender"] = "Влад"
+    context.user_data["pending_sender"] = "Виктория" if is_victoria(update) else "Влад"
 
     await update.message.reply_text(
-        f"📎 *{caption}*\n\nВыбери приоритет:",
+        f"📎 *{escape_md(caption)}*\n\nВыбери приоритет:",
         parse_mode="Markdown",
         reply_markup=PRIORITY_KEYBOARD
     )

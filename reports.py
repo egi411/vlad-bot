@@ -2,6 +2,12 @@ from datetime import datetime
 from todoist_client import get_tasks_today, get_all_active_tasks, get_completed_today
 
 
+def _esc(text: str) -> str:
+    for ch in ['\\', '*', '_', '`', '[']:
+        text = text.replace(ch, f'\\{ch}')
+    return text
+
+
 def build_morning_report() -> str:
     tasks = get_tasks_today()
     today = datetime.now().strftime("%Y-%m-%d")
@@ -19,7 +25,7 @@ def build_morning_report() -> str:
     lines.append("📋 *ТОП-5 задач на сегодня:*")
 
     for i, t in enumerate(top5, 1):
-        lines.append(f"{i}. {t['content']}")
+        lines.append(f"{i}. {_esc(t['content'])}")
 
     if not top5:
         lines.append("Нет задач на сегодня 🎉")
@@ -32,7 +38,7 @@ def build_evening_report() -> str:
     active = get_all_active_tasks()
     today = datetime.now().strftime("%Y-%m-%d")
 
-    waiting = [t for t in active if "⏳_Ожидаем_ответ" in t.get("labels", [])]
+    waiting = [t for t in active if "zhdu_otveta" in t.get("labels", [])]
     overdue = [t for t in active if t.get("due") and t["due"].get("date", "") < today]
     in_progress = [t for t in active if "🟡_В_работе" in t.get("labels", [])]
 
@@ -41,28 +47,28 @@ def build_evening_report() -> str:
     lines.append("✅ *Выполнено:*")
     if completed:
         for t in completed[:10]:
-            lines.append(f"• {t.get('content', '')}")
+            lines.append(f"• {_esc(t.get('content', ''))}")
     else:
         lines.append("• —")
 
     lines.append("\n📂 *Открыто:*")
     if in_progress:
         for t in in_progress[:5]:
-            lines.append(f"• {t['content']}")
+            lines.append(f"• {_esc(t['content'])}")
     else:
         lines.append("• —")
 
     lines.append("\n⏳ *Ожидаем ответ:*")
     if waiting:
         for t in waiting[:5]:
-            lines.append(f"• {t['content']}")
+            lines.append(f"• {_esc(t['content'])}")
     else:
         lines.append("• —")
 
     lines.append("\n🔴 *Просрочено:*")
     if overdue:
         for t in overdue[:5]:
-            lines.append(f"• {t['content']}")
+            lines.append(f"• {_esc(t['content'])}")
     else:
         lines.append("• —")
 
