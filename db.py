@@ -23,6 +23,16 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 """
 
+CREATE_COMMENTS_SQL = """
+CREATE TABLE IF NOT EXISTS task_comments (
+    id SERIAL PRIMARY KEY,
+    task_id INTEGER NOT NULL,
+    author TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+"""
+
 
 def _get_pool() -> psycopg2.pool.SimpleConnectionPool:
     global _pool
@@ -46,8 +56,9 @@ def init_db():
     try:
         with conn.cursor() as cur:
             cur.execute(CREATE_TABLE_SQL)
+            cur.execute(CREATE_COMMENTS_SQL)
         conn.commit()
-        logger.info("DB initialised — tasks table ready")
+        logger.info("DB initialised — tasks + comments tables ready")
     except Exception as e:
         logger.error(f"init_db error: {e}")
         conn.rollback()
@@ -76,6 +87,23 @@ def create_task(content: str, priority: int, project: str, sender: str, due: str
         logger.error(f"create_task error: {e}")
         conn.rollback()
         raise
+    finally:
+        _put(conn)
+
+
+def get_task(task_id: int) -> dict | None:
+    conn = _conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, content, priority, project, status, sender, due, created_at FROM tasks WHERE id=%s",
+                (task_id,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"get_task error: {e}")
+        return None
     finally:
         _put(conn)
 
@@ -146,6 +174,42 @@ def mark_done(task_id: int):
         logger.error(f"mark_done error: {e}")
         conn.rollback()
         raise
+    finally:
+        _put(conn)
+
+
+def add_comment(task_id: int, author: str, text: str) -> dict:
+    conn = _conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "INSERT INTO task_comments (task_id, author, text) VALUES (%s, %s, %s) RETURNING *",
+                (task_id, author, text),
+            )
+            row = dict(cur.fetchone())
+        conn.commit()
+        logger.info(f"add_comment task_id={task_id} author={author}")
+        return row
+    except Exception as e:
+        logger.error(f"add_comment error: {e}")
+        conn.rollback()
+        raise
+    finally:
+        _put(conn)
+
+
+def get_comments(task_id: int) -> list[dict]:
+    conn = _conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM task_comments WHERE task_id=%s ORDER BY created_at ASC",
+                (task_id,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception as e:
+        logger.error(f"get_comments error: {e}")
+        return []
     finally:
         _put(conn)
 
