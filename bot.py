@@ -310,7 +310,7 @@ def build_by_project(tasks, victoria_view: bool = False):
 
 
 # ── Карточка задачи ───────────────────────────────────────
-def _card_text_and_markup(task_id: int):
+def _card_text_and_markup(task_id: int, victoria_view: bool = False):
     task = db.get_task(task_id)
     if not task:
         return "❌ Задача не найдена", None
@@ -344,7 +344,7 @@ def _card_text_and_markup(task_id: int):
             lines.append(f"• _{escape_md(c['author'])} [{dt}]:_ {escape_md(c['text'])}")
 
     rows = []
-    if task["status"] != "done":
+    if victoria_view and task["status"] != "done":
         action_row = []
         if task["status"] != "waiting":
             action_row.append(InlineKeyboardButton("⏳ Жду ответа", callback_data=f"wait_{task_id}"))
@@ -360,7 +360,8 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
     task_id = int(query.data.replace("card_", ""))
-    text, markup = _card_text_and_markup(task_id)
+    victoria_view = query.from_user.id == get_victoria_id()
+    text, markup = _card_text_and_markup(task_id, victoria_view=victoria_view)
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
 
 
