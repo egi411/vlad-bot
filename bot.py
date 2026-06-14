@@ -41,8 +41,7 @@ VLAD_HELP = (
     "📌 *Команды:*\n"
     "➕ Добавить задачу — кнопка или просто напиши текст\n"
     "🎙 Голосовое — автоматически станет задачей\n"
-    "📋 Список задач — все активные задачи\n"
-    "⏳ Ожидают ответ — задачи на паузе"
+    "📋 Список задач — все активные задачи"
 )
 
 VICTORIA_HELP = (
@@ -57,7 +56,6 @@ VICTORIA_HELP = (
 VLAD_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("➕ Добавить задачу"), KeyboardButton("📋 Список задач")],
-        [KeyboardButton("⏳ Ожидают ответ")],
     ],
     resize_keyboard=True,
     input_field_placeholder="Или напиши задачу текстом..."

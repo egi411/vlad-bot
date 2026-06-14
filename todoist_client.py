@@ -138,6 +138,8 @@ def get_all_active_tasks():
     if known_ids:
         all_tasks = [t for t in all_tasks if t.get("project_id") in known_ids]
         logger.info(f"Tasks after project filter: {len(all_tasks)}")
+    # Убираем задачи с мусорным содержимым (JSON-объекты)
+    all_tasks = [t for t in all_tasks if not t.get("content", "").startswith("{")]
     return all_tasks
 
 
