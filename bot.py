@@ -262,10 +262,10 @@ async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT
 
 
 # ── Построение списка задач ───────────────────────────────
-def _build_keyboard(tasks_with_index, victoria_view: bool) -> InlineKeyboardMarkup | None:
-    """Card buttons only, 2 per row. Actions moved inside the card."""
+def _build_keyboard(tasks_with_index, source: str) -> InlineKeyboardMarkup | None:
+    """Card buttons only, 2 per row. Source encoded so back button returns to correct list."""
     card_buttons = [
-        InlineKeyboardButton(f"💬 {i}. {t['content'][:22]}", callback_data=f"card_{t['id']}")
+        InlineKeyboardButton(f"💬 {i}. {t['content'][:22]}", callback_data=f"card_{t['id']}_{source}")
         for i, t in tasks_with_index
     ]
     keyboard = [card_buttons[j:j + 2] for j in range(0, len(card_buttons), 2)]
@@ -283,7 +283,7 @@ def build_by_priority(tasks, victoria_view: bool = False):
         lines.append(f"{i}. {e} {escape_md(t['content'])}{waiting}")
         indexed.append((i, t))
 
-    markup = _build_keyboard(indexed, victoria_view=victoria_view)
+    markup = _build_keyboard(indexed, source="priority")
     return "\n".join(lines), markup
 
 
@@ -305,12 +305,12 @@ def build_by_project(tasks, victoria_view: bool = False):
             indexed.append((counter, t))
             counter += 1
 
-    markup = _build_keyboard(indexed, victoria_view=victoria_view)
+    markup = _build_keyboard(indexed, source="project")
     return "\n".join(lines), markup
 
 
 # ── Карточка задачи ───────────────────────────────────────
-def _card_text_and_markup(task_id: int, victoria_view: bool = False):
+def _card_text_and_markup(task_id: int, victoria_view: bool = False, source: str = "priority"):
     task = db.get_task(task_id)
     if not task:
         return "❌ Задача не найдена", None
@@ -352,7 +352,7 @@ def _card_text_and_markup(task_id: int, victoria_view: bool = False):
             action_row.append(InlineKeyboardButton("✅ Выполнить", callback_data=f"done_{task_id}"))
             rows.append(action_row)
         rows.append([InlineKeyboardButton("💬 Добавить комментарий / процесс", callback_data=f"comment_{task_id}")])
-    rows.append([InlineKeyboardButton("← Назад к списку", callback_data="back_list")])
+    rows.append([InlineKeyboardButton("← Назад к списку", callback_data=f"back_{source}")])
 
     keyboard = InlineKeyboardMarkup(rows)
     return "\n".join(lines), keyboard
@@ -361,12 +361,58 @@ def _card_text_and_markup(task_id: int, victoria_view: bool = False):
 async def handle_back_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    tasks = db.get_active_tasks()
-    if not tasks:
-        await query.edit_message_text("Нет активных задач 🎉")
-        return
+    # data: back_priority / back_project / back_list / back_waiting
+    source = query.data.replace("back_", "")
     victoria_view = query.from_user.id == get_victoria_id()
-    text, markup = build_by_priority(tasks, victoria_view=victoria_view)
+
+    tasks = db.get_active_tasks()
+
+    if source == "waiting":
+        waiting = db.get_waiting_tasks()
+        if not waiting:
+            await query.edit_message_text("⏳ Нет задач, ожидающих ответа.")
+            return
+        lines = ["⏳ *Ожидают ответа:*\n"]
+        indexed = []
+        for i, t in enumerate(sorted(waiting, key=lambda t: -t.get("priority", 1)), 1):
+            e = priority_emoji(t)
+            due_text = f" — {t['due']}" if t.get("due") else ""
+            lines.append(f"{i}. {e} {escape_md(t['content'])}{due_text}")
+            indexed.append((i, t))
+        text = "\n".join(lines)
+        markup = _build_keyboard(indexed, source="waiting")
+    elif source == "project":
+        if not tasks:
+            await query.edit_message_text("Нет активных задач 🎉")
+            return
+        text, markup = build_by_project(tasks, victoria_view=victoria_view)
+    elif source == "list":
+        if not tasks:
+            await query.edit_message_text("Нет активных задач 🎉")
+            return
+        from collections import defaultdict
+        by_project = defaultdict(list)
+        for t in tasks:
+            by_project[t.get("project", "Без проекта")].append(t)
+        lines = ["📋 *Список задач:*\n"]
+        indexed = []
+        counter = 1
+        for project_name, items in by_project.items():
+            lines.append(f"\n*{escape_md(project_name)}*")
+            for t in sorted(items, key=lambda t: -t.get("priority", 1)):
+                e = priority_emoji(t)
+                waiting = " ⏳" if t.get("status") == "waiting" else ""
+                lines.append(f"{counter}. {e} {escape_md(t['content'])}{waiting}")
+                indexed.append((counter, t))
+                counter += 1
+        text = "\n".join(lines)
+        markup = _build_keyboard(indexed, source="list")
+    else:  # priority (default)
+        if not tasks:
+            await query.edit_message_text("Нет активных задач 🎉")
+            return
+        text, markup = build_by_priority(tasks, victoria_view=victoria_view)
+
     if len(text) > 4000:
         text = text[:4000] + "\n..."
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
@@ -375,9 +421,12 @@ async def handle_back_list_callback(update: Update, context: ContextTypes.DEFAUL
 async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    task_id = int(query.data.replace("card_", ""))
+    # data: card_{id}_{source}
+    parts = query.data.split("_", 2)  # ["card", "123", "priority"]
+    task_id = int(parts[1])
+    source = parts[2] if len(parts) > 2 else "priority"
     victoria_view = query.from_user.id == get_victoria_id()
-    text, markup = _card_text_and_markup(task_id, victoria_view=victoria_view)
+    text, markup = _card_text_and_markup(task_id, victoria_view=victoria_view, source=source)
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
 
 
@@ -512,7 +561,7 @@ async def btn_task_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     indexed.append((counter, t))
                     counter += 1
             text = "\n".join(lines)
-            markup = _build_keyboard(indexed, victoria_view=False)
+            markup = _build_keyboard(indexed, source="list")
 
         if len(text) > 4000:
             text = text[:4000] + "\n..."
@@ -561,7 +610,7 @@ async def btn_waiting(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"{i}. {e} {escape_md(t['content'])}{due_text}")
         indexed.append((i, t))
 
-    markup = _build_keyboard(indexed, victoria_view=False)
+    markup = _build_keyboard(indexed, source="waiting")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown", reply_markup=markup)
 
 
@@ -759,7 +808,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(handle_wait_done_callback, pattern="^wait_"))
     app.add_handler(CallbackQueryHandler(handle_complete_callback, pattern="^done_"))
     app.add_handler(CallbackQueryHandler(handle_no_comment_callback, pattern="^nocomment_"))
-    app.add_handler(CallbackQueryHandler(handle_back_list_callback, pattern="^back_list$"))
+    app.add_handler(CallbackQueryHandler(handle_back_list_callback, pattern="^back_"))
     app.add_handler(CallbackQueryHandler(handle_card_callback, pattern="^card_"))
     app.add_handler(CallbackQueryHandler(handle_add_comment_callback, pattern="^comment_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
