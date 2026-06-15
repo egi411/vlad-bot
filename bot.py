@@ -351,7 +351,7 @@ def _card_text_and_markup(task_id: int, victoria_view: bool = False, source: str
                 action_row.append(InlineKeyboardButton("⏳ Жду ответа", callback_data=f"wait_{task_id}"))
             action_row.append(InlineKeyboardButton("✅ Выполнить", callback_data=f"done_{task_id}"))
             rows.append(action_row)
-        rows.append([InlineKeyboardButton("💬 Добавить комментарий / процесс", callback_data=f"comment_{task_id}")])
+        rows.append([InlineKeyboardButton("💬 Добавить комментарий / процесс", callback_data=f"comment_{task_id}_{source}")])
     rows.append([InlineKeyboardButton("← Назад к списку", callback_data=f"back_{source}")])
 
     keyboard = InlineKeyboardMarkup(rows)
@@ -433,13 +433,17 @@ async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 async def handle_add_comment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    task_id = int(query.data.replace("comment_", ""))
+    # data: comment_{task_id}_{source}
+    parts = query.data.split("_", 2)
+    task_id = int(parts[1])
+    source = parts[2] if len(parts) > 2 else "priority"
 
     context.user_data["pending_comment_action"] = "card"
     context.user_data["pending_comment_task_id"] = task_id
+    context.user_data["pending_comment_source"] = source
 
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("❌ Отмена", callback_data=f"card_{task_id}")
+        InlineKeyboardButton("❌ Отмена", callback_data=f"card_{task_id}_{source}")
     ]])
     await query.edit_message_text(
         "💬 *Напиши комментарий к задаче:*",
@@ -625,8 +629,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         author = "Виктория" if is_victoria(update) else "Влад"
 
         if action == "card":
+            source = context.user_data.pop("pending_comment_source", "priority")
             db.add_comment(task_id, author, text)
-            card_text, card_markup = _card_text_and_markup(task_id)
+            card_text, card_markup = _card_text_and_markup(task_id, victoria_view=is_victoria(update), source=source)
             await update.message.reply_text("✅ Комментарий добавлен!")
             await update.message.reply_text(card_text, parse_mode="Markdown", reply_markup=card_markup)
         else:
