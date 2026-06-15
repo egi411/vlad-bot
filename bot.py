@@ -194,6 +194,12 @@ async def btn_add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_task_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
+
+    # Если ждём комментарий — передаём туда и выходим из разговора
+    if context.user_data.get("pending_comment_action"):
+        await handle_text(update, context)
+        return ConversationHandler.END
+
     if text == "❌ Отмена" or text in MENU_BUTTONS:
         keyboard = _victoria_keyboard(update.effective_chat.id) if is_victoria(update) else VLAD_KEYBOARD
         await update.message.reply_text("Отменено.", reply_markup=keyboard)
