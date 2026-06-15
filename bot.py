@@ -32,6 +32,10 @@ MENU_BUTTONS = {
 
 notifications_on: set[int] = set()
 
+# Ожидание комментария: chat_id -> {action, task_id, source}
+# Отдельно от user_data чтобы не сбрасывалось при clear()
+_pending_comment: dict[int, dict] = {}
+
 VLAD_HELP = (
     "\n\n─────────────────\n"
     "📌 *Команды:*\n"
@@ -196,7 +200,7 @@ async def receive_task_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
     # Если ждём комментарий — передаём туда и выходим из разговора
-    if context.user_data.get("pending_comment_action"):
+    if update.effective_chat.id in _pending_comment:
         await handle_text(update, context)
         return ConversationHandler.END
 
@@ -449,9 +453,7 @@ async def handle_add_comment_callback(update: Update, context: ContextTypes.DEFA
     task_id = int(parts[1])
     source = parts[2] if len(parts) > 2 else "priority"
 
-    context.user_data["pending_comment_action"] = "card"
-    context.user_data["pending_comment_task_id"] = task_id
-    context.user_data["pending_comment_source"] = source
+    _pending_comment[query.from_user.id] = {"action": "card", "task_id": task_id, "source": source}
 
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("❌ Отмена", callback_data=f"card_{task_id}_{source}")
@@ -472,8 +474,7 @@ async def handle_wait_done_callback(update: Update, context: ContextTypes.DEFAUL
     task = db.get_task(task_id)
     name = escape_md(task["content"][:50]) if task else f"#{task_id}"
 
-    context.user_data["pending_comment_action"] = "wait"
-    context.user_data["pending_comment_task_id"] = task_id
+    _pending_comment[query.from_user.id] = {"action": "wait", "task_id": task_id, "source": "priority"}
 
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("➡️ Пропустить", callback_data=f"nocomment_wait_{task_id}")
@@ -494,8 +495,7 @@ async def handle_complete_callback(update: Update, context: ContextTypes.DEFAULT
     task = db.get_task(task_id)
     name = escape_md(task["content"][:50]) if task else f"#{task_id}"
 
-    context.user_data["pending_comment_action"] = "done"
-    context.user_data["pending_comment_task_id"] = task_id
+    _pending_comment[query.from_user.id] = {"action": "done", "task_id": task_id, "source": "priority"}
 
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("➡️ Пропустить", callback_data=f"nocomment_done_{task_id}")
@@ -517,8 +517,7 @@ async def handle_no_comment_callback(update: Update, context: ContextTypes.DEFAU
     action = parts[1]
     task_id = int(parts[2])
 
-    context.user_data.pop("pending_comment_action", None)
-    context.user_data.pop("pending_comment_task_id", None)
+    _pending_comment.pop(query.from_user.id, None)
 
     author = "Виктория" if query.from_user.id == get_victoria_id() else "Влад"
     await _execute_task_action(query.get_bot(), action, task_id, comment=None, author=author)
@@ -634,13 +633,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
     # Обработка ввода комментария
-    if context.user_data.get("pending_comment_action"):
-        action = context.user_data.pop("pending_comment_action")
-        task_id = context.user_data.pop("pending_comment_task_id")
+    chat_id = update.effective_chat.id
+    if chat_id in _pending_comment:
+        pending = _pending_comment.pop(chat_id)
+        action = pending["action"]
+        task_id = pending["task_id"]
+        source = pending.get("source", "priority")
         author = "Виктория" if is_victoria(update) else "Влад"
 
         if action == "card":
-            source = context.user_data.pop("pending_comment_source", "priority")
             db.add_comment(task_id, author, text)
             card_text, card_markup = _card_text_and_markup(task_id, victoria_view=is_victoria(update), source=source)
             await update.message.reply_text("✅ Комментарий добавлен!")
