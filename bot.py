@@ -533,15 +533,17 @@ async def _execute_task_action(bot, action: str, task_id: int, comment: str | No
         db.mark_waiting(task_id)
         msg = f"⏳ *Виктория ждёт ответа:*\n\n«{name}»"
         if comment:
-            msg += f"\n\n💬 _{escape_md(comment)}_"
+            msg += f"\n\n💬 *Комментарий:* {escape_md(comment)}"
         msg += "\n\nНажми «Ожидают ответ» чтобы посмотреть список"
+        logger.info(f"notify_vlad wait task_id={task_id} comment={comment!r}")
         await notify_vlad(bot, msg)
 
     elif action == "done":
         db.mark_done(task_id)
         msg = f"✅ *Виктория выполнила задачу:*\n\n«{name}»"
         if comment:
-            msg += f"\n\n💬 _{escape_md(comment)}_"
+            msg += f"\n\n💬 *Комментарий:* {escape_md(comment)}"
+        logger.info(f"notify_vlad done task_id={task_id} comment={comment!r}")
         await notify_vlad(bot, msg)
 
 
