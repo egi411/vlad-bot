@@ -839,7 +839,6 @@ async def main():
     async with app:
         await app.start()
         await app.updater.start_polling()
-        await _broadcast_startup(app.bot)
         await asyncio.Event().wait()
 
 
