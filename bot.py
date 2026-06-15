@@ -180,7 +180,7 @@ async def start_victoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     save_victoria_id(chat_id)
     await update.message.reply_text(
-        "✅ *Привет, Виктория!*" + VICTORIA_HELP,
+        f"✅ *Привет, Виктория!*\n`Chat ID: {chat_id}`" + VICTORIA_HELP,
         parse_mode="Markdown",
         reply_markup=_victoria_keyboard(update.effective_chat.id)
     )
