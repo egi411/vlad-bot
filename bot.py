@@ -352,9 +352,24 @@ def _card_text_and_markup(task_id: int, victoria_view: bool = False):
             action_row.append(InlineKeyboardButton("✅ Выполнить", callback_data=f"done_{task_id}"))
             rows.append(action_row)
         rows.append([InlineKeyboardButton("💬 Добавить комментарий / процесс", callback_data=f"comment_{task_id}")])
+    rows.append([InlineKeyboardButton("← Назад к списку", callback_data="back_list")])
 
     keyboard = InlineKeyboardMarkup(rows)
     return "\n".join(lines), keyboard
+
+
+async def handle_back_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    tasks = db.get_active_tasks()
+    if not tasks:
+        await query.edit_message_text("Нет активных задач 🎉")
+        return
+    victoria_view = query.from_user.id == get_victoria_id()
+    text, markup = build_by_priority(tasks, victoria_view=victoria_view)
+    if len(text) > 4000:
+        text = text[:4000] + "\n..."
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
 
 
 async def handle_card_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -744,6 +759,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(handle_wait_done_callback, pattern="^wait_"))
     app.add_handler(CallbackQueryHandler(handle_complete_callback, pattern="^done_"))
     app.add_handler(CallbackQueryHandler(handle_no_comment_callback, pattern="^nocomment_"))
+    app.add_handler(CallbackQueryHandler(handle_back_list_callback, pattern="^back_list$"))
     app.add_handler(CallbackQueryHandler(handle_card_callback, pattern="^card_"))
     app.add_handler(CallbackQueryHandler(handle_add_comment_callback, pattern="^comment_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
