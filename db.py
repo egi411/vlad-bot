@@ -23,6 +23,13 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 """
 
+CREATE_SETTINGS_SQL = """
+CREATE TABLE IF NOT EXISTS bot_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+"""
+
 CREATE_COMMENTS_SQL = """
 CREATE TABLE IF NOT EXISTS task_comments (
     id SERIAL PRIMARY KEY,
@@ -57,6 +64,7 @@ def init_db():
         with conn.cursor() as cur:
             cur.execute(CREATE_TABLE_SQL)
             cur.execute(CREATE_COMMENTS_SQL)
+            cur.execute(CREATE_SETTINGS_SQL)
         conn.commit()
         logger.info("DB initialised — tasks + comments tables ready")
     except Exception as e:
@@ -194,6 +202,36 @@ def add_comment(task_id: int, author: str, text: str) -> dict:
         logger.error(f"add_comment error: {e}")
         conn.rollback()
         raise
+    finally:
+        _put(conn)
+
+
+def get_setting(key: str) -> str | None:
+    conn = _conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM bot_settings WHERE key=%s", (key,))
+            row = cur.fetchone()
+            return row[0] if row else None
+    except Exception as e:
+        logger.error(f"get_setting error: {e}")
+        return None
+    finally:
+        _put(conn)
+
+
+def set_setting(key: str, value: str):
+    conn = _conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO bot_settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+                (key, value),
+            )
+        conn.commit()
+    except Exception as e:
+        logger.error(f"set_setting error: {e}")
+        conn.rollback()
     finally:
         _put(conn)
 
