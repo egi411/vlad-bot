@@ -344,13 +344,14 @@ def _card_text_and_markup(task_id: int, victoria_view: bool = False):
             lines.append(f"• _{escape_md(c['author'])} [{dt}]:_ {escape_md(c['text'])}")
 
     rows = []
-    if victoria_view and task["status"] != "done":
-        action_row = []
-        if task["status"] != "waiting":
-            action_row.append(InlineKeyboardButton("⏳ Жду ответа", callback_data=f"wait_{task_id}"))
-        action_row.append(InlineKeyboardButton("✅ Выполнить", callback_data=f"done_{task_id}"))
-        rows.append(action_row)
-    rows.append([InlineKeyboardButton("💬 Добавить комментарий / процесс", callback_data=f"comment_{task_id}")])
+    if victoria_view:
+        if task["status"] != "done":
+            action_row = []
+            if task["status"] != "waiting":
+                action_row.append(InlineKeyboardButton("⏳ Жду ответа", callback_data=f"wait_{task_id}"))
+            action_row.append(InlineKeyboardButton("✅ Выполнить", callback_data=f"done_{task_id}"))
+            rows.append(action_row)
+        rows.append([InlineKeyboardButton("💬 Добавить комментарий / процесс", callback_data=f"comment_{task_id}")])
 
     keyboard = InlineKeyboardMarkup(rows)
     return "\n".join(lines), keyboard
