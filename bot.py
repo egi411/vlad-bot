@@ -154,18 +154,23 @@ async def notify_victoria(bot, task_content: str, priority: int, due: str | None
 
 
 async def notify_vlad(bot, text: str):
-    vlad_id = get_vlad_id()
-    if not vlad_id:
-        return
-    await bot.send_message(chat_id=vlad_id, text=text, parse_mode="Markdown")
+    victoria_id = get_victoria_id()
+    for chat_id in db.get_all_users():
+        if chat_id == victoria_id:
+            continue
+        try:
+            await bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"notify_vlad failed for {chat_id}: {e}")
 
 
 # ── /start ────────────────────────────────────────────────
 async def start_vlad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     save_vlad_id(chat_id)
+    db.register_user(chat_id)
     await update.message.reply_text(
-        "✅ *Система активирована, Влад!*" + VLAD_HELP,
+        f"✅ *Система активирована, Влад!*\n`VLAD_CHAT_ID: {chat_id}`" + VLAD_HELP,
         parse_mode="Markdown",
         reply_markup=VLAD_KEYBOARD
     )

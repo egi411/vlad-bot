@@ -30,6 +30,13 @@ CREATE TABLE IF NOT EXISTS bot_settings (
 );
 """
 
+CREATE_USERS_SQL = """
+CREATE TABLE IF NOT EXISTS bot_users (
+    chat_id BIGINT PRIMARY KEY,
+    registered_at TIMESTAMP DEFAULT NOW()
+);
+"""
+
 CREATE_COMMENTS_SQL = """
 CREATE TABLE IF NOT EXISTS task_comments (
     id SERIAL PRIMARY KEY,
@@ -65,6 +72,7 @@ def init_db():
             cur.execute(CREATE_TABLE_SQL)
             cur.execute(CREATE_COMMENTS_SQL)
             cur.execute(CREATE_SETTINGS_SQL)
+            cur.execute(CREATE_USERS_SQL)
         conn.commit()
         logger.info("DB initialised — tasks + comments tables ready")
     except Exception as e:
@@ -202,6 +210,35 @@ def add_comment(task_id: int, author: str, text: str) -> dict:
         logger.error(f"add_comment error: {e}")
         conn.rollback()
         raise
+    finally:
+        _put(conn)
+
+
+def register_user(chat_id: int):
+    conn = _conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO bot_users (chat_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                (chat_id,),
+            )
+        conn.commit()
+    except Exception as e:
+        logger.error(f"register_user error: {e}")
+        conn.rollback()
+    finally:
+        _put(conn)
+
+
+def get_all_users() -> list[int]:
+    conn = _conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT chat_id FROM bot_users")
+            return [r[0] for r in cur.fetchall()]
+    except Exception as e:
+        logger.error(f"get_all_users error: {e}")
+        return []
     finally:
         _put(conn)
 
