@@ -19,8 +19,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     status TEXT NOT NULL DEFAULT 'active',
     sender TEXT NOT NULL DEFAULT 'Влад',
     due TEXT,
+    due_time TEXT,
     created_at TIMESTAMP DEFAULT NOW()
 );
+"""
+
+MIGRATE_SQL = """
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS due_time TEXT;
 """
 
 CREATE_SETTINGS_SQL = """
@@ -70,6 +75,7 @@ def init_db():
     try:
         with conn.cursor() as cur:
             cur.execute(CREATE_TABLE_SQL)
+            cur.execute(MIGRATE_SQL)
             cur.execute(CREATE_COMMENTS_SQL)
             cur.execute(CREATE_SETTINGS_SQL)
             cur.execute(CREATE_USERS_SQL)
@@ -83,17 +89,18 @@ def init_db():
         _put(conn)
 
 
-def create_task(content: str, priority: int, project: str, sender: str, due: str | None = None) -> dict:
+def create_task(content: str, priority: int, project: str, sender: str,
+                due: str | None = None, due_time: str | None = None) -> dict:
     conn = _conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                INSERT INTO tasks (content, priority, project, sender, due)
-                VALUES (%s, %s, %s, %s, %s)
-                RETURNING id, content, priority, project, status, sender, due, created_at
+                INSERT INTO tasks (content, priority, project, sender, due, due_time)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id, content, priority, project, status, sender, due, due_time, created_at
                 """,
-                (content, priority, project, sender, due),
+                (content, priority, project, sender, due, due_time),
             )
             row = dict(cur.fetchone())
         conn.commit()
@@ -112,7 +119,7 @@ def get_task(task_id: int) -> dict | None:
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
-                "SELECT id, content, priority, project, status, sender, due, created_at FROM tasks WHERE id=%s",
+                "SELECT id, content, priority, project, status, sender, due, due_time, created_at FROM tasks WHERE id=%s",
                 (task_id,),
             )
             row = cur.fetchone()
@@ -130,7 +137,7 @@ def get_active_tasks() -> list[dict]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, content, priority, project, status, sender, due, created_at
+                SELECT id, content, priority, project, status, sender, due, due_time, created_at
                 FROM tasks
                 WHERE status IN ('active', 'waiting')
                 ORDER BY priority DESC, created_at ASC
@@ -150,7 +157,7 @@ def get_waiting_tasks() -> list[dict]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, content, priority, project, status, sender, due, created_at
+                SELECT id, content, priority, project, status, sender, due, due_time, created_at
                 FROM tasks
                 WHERE status = 'waiting'
                 ORDER BY priority DESC, created_at ASC
@@ -296,7 +303,7 @@ def get_completed_today() -> list[dict]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, content, priority, project, status, sender, due, created_at
+                SELECT id, content, priority, project, status, sender, due, due_time, created_at
                 FROM tasks
                 WHERE status = 'done'
                   AND created_at >= %s::date

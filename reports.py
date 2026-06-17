@@ -1,5 +1,6 @@
 from datetime import datetime
 import db
+from voice import format_due_date
 
 
 def _esc(text: str) -> str:
@@ -23,7 +24,8 @@ def build_morning_report() -> str:
     lines.append("📋 *ТОП-5 задач на сегодня:*")
 
     for i, t in enumerate(top5, 1):
-        lines.append(f"{i}. {_esc(t['content'])}")
+        due_label = f" — {format_due_date(t['due'])}" if t.get("due") else ""
+        lines.append(f"{i}. {_esc(t['content'])}{due_label}")
 
     if not top5:
         lines.append("Нет задач на сегодня 🎉")

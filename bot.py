@@ -2,7 +2,7 @@ import os
 import asyncio
 import logging
 import tempfile
-from datetime import time, timezone, timedelta
+from datetime import time, timezone, timedelta, datetime
 
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
@@ -12,7 +12,7 @@ from telegram.ext import (
 
 from config import TELEGRAM_TOKEN
 import db
-from voice import transcribe_voice, parse_due_date, detect_task_meta
+from voice import transcribe_voice, parse_due_date, parse_due_time, detect_task_meta, shorten_task, format_due_date
 from reports import build_morning_report, build_evening_report
 
 logging.basicConfig(level=logging.INFO)
@@ -72,6 +72,17 @@ CATEGORY_KEYBOARD = InlineKeyboardMarkup([
     ],
 ])
 
+DATE_KEYBOARD = InlineKeyboardMarkup([
+    [
+        InlineKeyboardButton("📅 Сегодня", callback_data="date_today"),
+        InlineKeyboardButton("📅 Завтра", callback_data="date_tomorrow"),
+    ],
+    [
+        InlineKeyboardButton("📅 Послезавтра", callback_data="date_after"),
+        InlineKeyboardButton("⏭ Без срока", callback_data="date_none"),
+    ],
+])
+
 
 def escape_md(text: str) -> str:
     for ch in ['\\', '*', '_', '`', '[']:
@@ -114,6 +125,7 @@ async def receive_task_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["pending_task"] = text
     context.user_data["pending_due"] = parse_due_date(text)
+    context.user_data["pending_due_time"] = parse_due_time(text)
     await update.message.reply_text(
         f"📝 *{escape_md(text)}*\n\nВыбери приоритет:",
         parse_mode="Markdown",
@@ -144,16 +156,60 @@ async def handle_category_callback(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     await query.answer()
     project = query.data.replace("cat_", "")
+    context.user_data["pending_project"] = project
+
+    # If date already detected from text — skip date picker
+    if context.user_data.get("pending_due"):
+        await _finalize_task(query, context)
+        return
+
     text = context.user_data.get("pending_task", "")
     priority = context.user_data.get("pending_priority", 2)
-    due = context.user_data.get("pending_due")
+    e = PRIORITY_EMOJI[priority]
+    cat = CATEGORY_DISPLAY.get(project, project)
+    await query.edit_message_text(
+        f"📝 *{escape_md(text)}*\n{e}  •  {cat}\n\nУкажи срок:",
+        parse_mode="Markdown",
+        reply_markup=DATE_KEYBOARD
+    )
 
-    db.create_task(content=text, priority=priority, project=project, sender="Влад", due=due)
+
+async def handle_date_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    choice = query.data.replace("date_", "")
+
+    today = datetime.now()
+    if choice == "today":
+        context.user_data["pending_due"] = today.strftime("%Y-%m-%d")
+    elif choice == "tomorrow":
+        context.user_data["pending_due"] = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+    elif choice == "after":
+        context.user_data["pending_due"] = (today + timedelta(days=2)).strftime("%Y-%m-%d")
+    else:
+        context.user_data["pending_due"] = None
+
+    await _finalize_task(query, context)
+
+
+async def _finalize_task(query, context):
+    text = context.user_data.get("pending_task", "")
+    priority = context.user_data.get("pending_priority", 2)
+    project = context.user_data.get("pending_project", "VLAD BYKOV")
+    due = context.user_data.get("pending_due")
+    due_time = context.user_data.get("pending_due_time")
+
+    db.create_task(content=text, priority=priority, project=project, sender="Влад", due=due, due_time=due_time)
+
+    if due_time:
+        _schedule_reminder(context.job_queue, text, due_time)
 
     e = PRIORITY_EMOJI[priority]
     cat = CATEGORY_DISPLAY.get(project, project)
-    due_text = f" (срок: {due})" if due else ""
-    await query.edit_message_text(f"✅ Задача добавлена!\n{e} {text}{due_text}\n{cat}")
+    due_str = format_due_date(due) if due else ""
+    due_text = f"\n📅 {due_str}" if due_str else ""
+    time_text = f" в {due_time}" if due_time else ""
+    await query.edit_message_text(f"✅ Задача добавлена!\n{e} {escape_md(text)}{due_text}{time_text}\n{cat}")
     await query.message.reply_text("Готово!", reply_markup=KEYBOARD)
     context.user_data.clear()
 
@@ -168,6 +224,19 @@ def _card_buttons_keyboard(tasks_with_index, source: str) -> InlineKeyboardMarku
     return InlineKeyboardMarkup(rows) if rows else None
 
 
+def _due_label(task) -> str:
+    due = task.get("due")
+    due_time = task.get("due_time")
+    if not due and not due_time:
+        return ""
+    parts = []
+    if due:
+        parts.append(format_due_date(due))
+    if due_time:
+        parts.append(f"в {due_time}")
+    return "  📅 " + " ".join(parts)
+
+
 def build_by_priority(tasks):
     sorted_tasks = sorted(tasks, key=lambda t: -t.get("priority", 1))[:20]
     lines = ["📊 *По приоритету:*\n"]
@@ -175,7 +244,7 @@ def build_by_priority(tasks):
     for i, t in enumerate(sorted_tasks, 1):
         e = priority_emoji(t)
         done = " ✅" if t.get("status") == "done" else ""
-        lines.append(f"{i}. {e} {escape_md(t['content'])}{done}")
+        lines.append(f"{i}. {e} {escape_md(t['content'])}{_due_label(t)}{done}")
         indexed.append((i, t))
     return "\n".join(lines), _card_buttons_keyboard(indexed, "priority")
 
@@ -189,11 +258,12 @@ def build_by_project(tasks):
     indexed = []
     counter = 1
     for project_name, items in by_project.items():
-        lines.append(f"\n*{escape_md(project_name)}*")
+        display_name = CATEGORY_DISPLAY.get(project_name, project_name)
+        lines.append(f"\n*{escape_md(display_name)}*")
         for t in sorted(items, key=lambda t: -t.get("priority", 1))[:10]:
             e = priority_emoji(t)
             done = " ✅" if t.get("status") == "done" else ""
-            lines.append(f"{counter}. {e} {escape_md(t['content'])}{done}")
+            lines.append(f"{counter}. {e} {escape_md(t['content'])}{_due_label(t)}{done}")
             indexed.append((counter, t))
             counter += 1
     return "\n".join(lines), _card_buttons_keyboard(indexed, "project")
@@ -208,11 +278,12 @@ def build_task_list(tasks):
     indexed = []
     counter = 1
     for project_name, items in by_project.items():
-        lines.append(f"\n*{escape_md(project_name)}*")
+        display_name = CATEGORY_DISPLAY.get(project_name, project_name)
+        lines.append(f"\n*{escape_md(display_name)}*")
         for t in sorted(items, key=lambda t: -t.get("priority", 1)):
             e = priority_emoji(t)
             done = " ✅" if t.get("status") == "done" else ""
-            lines.append(f"{counter}. {e} {escape_md(t['content'])}{done}")
+            lines.append(f"{counter}. {e} {escape_md(t['content'])}{_due_label(t)}{done}")
             indexed.append((counter, t))
             counter += 1
     return "\n".join(lines), _card_buttons_keyboard(indexed, "list")
@@ -237,8 +308,10 @@ def _card_text_and_markup(task_id: int, source: str = "list"):
         f"*Приоритет:* {pname}",
         f"*Категория:* {cat}",
     ]
-    if task.get("due"):
-        lines.append(f"*Срок:* {escape_md(task['due'])}")
+    if task.get("due") or task.get("due_time"):
+        due_str = format_due_date(task["due"]) if task.get("due") else ""
+        time_str = f" в {task['due_time']}" if task.get("due_time") else ""
+        lines.append(f"*Срок:* {escape_md(due_str + time_str)}")
 
     if comments:
         lines.append("\n💬 *Комментарии:*")
@@ -404,6 +477,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["pending_task"] = text
     context.user_data["pending_due"] = parse_due_date(text)
+    context.user_data["pending_due_time"] = parse_due_time(text)
     await update.message.reply_text(
         f"📝 *{escape_md(text)}*\n\nВыбери приоритет:",
         parse_mode="Markdown",
@@ -426,26 +500,35 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await file.download_to_drive(tmp.name)
         tmp_path = tmp.name
     try:
-        text = transcribe_voice(tmp_path)
+        full_text = transcribe_voice(tmp_path)
         os.unlink(tmp_path)
-        await msg.edit_text("🤖 Определяю приоритет и категорию...")
-        meta = detect_task_meta(text)
+        await msg.edit_text("🤖 Анализирую...")
+        title = shorten_task(full_text)
+        meta = detect_task_meta(full_text)
         priority = meta.get("priority", 2)
         category = meta.get("category", "VLAD BYKOV")
-        due = parse_due_date(text)
+        due = parse_due_date(full_text)
+        due_time = parse_due_time(full_text)
 
-        context.user_data["pending_task"] = text
+        context.user_data["pending_task"] = title
         context.user_data["pending_due"] = due
+        context.user_data["pending_due_time"] = due_time
         context.user_data["pending_priority"] = priority
         context.user_data["pending_project"] = category
 
         e = PRIORITY_EMOJI[priority]
         pname = PRIORITY_NAMES[priority]
         cname = CATEGORY_DISPLAY.get(category, category)
-        due_line = f"\n📅 {due}" if due else ""
+        due_line = f"\n📅 {format_due_date(due)}" if due else ""
+        time_line = f"\n🕐 в {due_time}" if due_time else ""
+
+        transcript_preview = full_text[:120] + ("…" if len(full_text) > 120 else "")
 
         await msg.edit_text(
-            f"🎙 *{escape_md(text)}*\n\n{e} {pname}  •  {cname}{due_line}\n\nСоздать задачу?",
+            f"🎙 _{escape_md(transcript_preview)}_\n\n"
+            f"📝 *{escape_md(title)}*\n"
+            f"{e} {pname}  •  {cname}{due_line}{time_line}\n\n"
+            f"Создать задачу?",
             parse_mode="Markdown",
             reply_markup=_voice_confirm_keyboard()
         )
@@ -461,13 +544,19 @@ async def handle_voice_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
     priority = context.user_data.get("pending_priority", 2)
     category = context.user_data.get("pending_project", "VLAD BYKOV")
     due = context.user_data.get("pending_due")
+    due_time = context.user_data.get("pending_due_time")
 
-    db.create_task(content=text, priority=priority, project=category, sender="Влад", due=due)
+    db.create_task(content=text, priority=priority, project=category, sender="Влад", due=due, due_time=due_time)
+
+    if due_time:
+        _schedule_reminder(context.job_queue, text, due_time)
 
     e = PRIORITY_EMOJI[priority]
     cname = CATEGORY_DISPLAY.get(category, category)
-    due_text = f" (срок: {due})" if due else ""
-    await query.edit_message_text(f"✅ Задача создана!\n{e} {text}{due_text}\n{cname}")
+    due_str = format_due_date(due) if due else ""
+    due_text = f"\n📅 {due_str}" if due_str else ""
+    time_text = f" в {due_time}" if due_time else ""
+    await query.edit_message_text(f"✅ Задача создана!\n{e} {escape_md(text)}{due_text}{time_text}\n{cname}")
     await query.message.reply_text("Готово!", reply_markup=KEYBOARD)
     context.user_data.clear()
 
@@ -508,6 +597,31 @@ async def send_evening_report(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=int(vlad_id), text=build_evening_report(), parse_mode="Markdown")
 
 
+async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE):
+    data = context.job.data
+    vlad_id = db.get_setting("vlad_id")
+    if vlad_id:
+        await context.bot.send_message(
+            chat_id=int(vlad_id),
+            text=f"⏰ *Напоминание — через 1 час!*\n{escape_md(data['task'])} в *{data['due_time']}*",
+            parse_mode="Markdown"
+        )
+
+
+def _schedule_reminder(job_queue, task_name: str, due_time_str: str):
+    """Schedule a reminder 1 hour before the task's due_time."""
+    h, m = map(int, due_time_str.split(":"))
+    now = datetime.now()
+    task_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    if task_dt <= now:
+        task_dt += timedelta(days=1)
+    reminder_dt = task_dt - timedelta(hours=1)
+    delay = (reminder_dt - now).total_seconds()
+    if delay > 0:
+        job_queue.run_once(send_task_reminder, delay, data={"task": task_name, "due_time": due_time_str})
+        logger.info(f"Reminder scheduled for {task_name!r} at {due_time_str} (in {delay:.0f}s)")
+
+
 # ── Запуск ────────────────────────────────────────────────
 async def main():
     db.init_db()
@@ -529,6 +643,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(handle_voice_edit, pattern="^voice_edit$"))
     app.add_handler(CallbackQueryHandler(handle_priority_callback, pattern="^priority_"))
     app.add_handler(CallbackQueryHandler(handle_category_callback, pattern="^cat_"))
+    app.add_handler(CallbackQueryHandler(handle_date_callback, pattern="^date_"))
     app.add_handler(CallbackQueryHandler(handle_done_callback, pattern="^done_"))
     app.add_handler(CallbackQueryHandler(handle_no_comment_callback, pattern="^nocomment_"))
     app.add_handler(CallbackQueryHandler(handle_card_callback, pattern="^card_"))
