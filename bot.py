@@ -28,12 +28,16 @@ MENU_BUTTONS = {
     "📋 Список задач", "📊 По приоритету", "🗂 По проектам", "➕ Добавить задачу",
 }
 
-CATEGORY_EMOJI = {"VLAD BYKOV": "👔", "Контент": "🎬", "Restoria": "🏪", "Личное": "👤"}
 CATEGORY_DISPLAY = {
-    "VLAD BYKOV": "👔 Клиенты",
-    "Контент": "🎬 Контент",
-    "Restoria": "🏪 Restoria",
-    "Личное": "👤 Личное",
+    "Модный дом":         "👔 Модный дом",
+    "RESTORIA":           "🏪 RESTORIA",
+    "Идеи":               "💡 Идеи",
+    "Идеи Instagram":     "📸 Идеи Instagram",
+    "Идеи TikTok":        "🎵 Идеи TikTok",
+    "Идеи YouTube":       "🎬 Идеи YouTube",
+    "Коллаборации":       "🤝 Коллаборации",
+    "Коллаборация Jetex": "✈️ Jetex",
+    "Коллаборация Venuum":"💎 Venuum",
 }
 
 # Ожидание комментария: chat_id -> {task_id, source}
@@ -63,12 +67,23 @@ PRIORITY_KEYBOARD = InlineKeyboardMarkup([
 
 CATEGORY_KEYBOARD = InlineKeyboardMarkup([
     [
-        InlineKeyboardButton("👔 Клиенты", callback_data="cat_VLAD BYKOV"),
-        InlineKeyboardButton("🎬 Контент", callback_data="cat_Контент"),
+        InlineKeyboardButton("👔 Модный дом",    callback_data="cat_Модный дом"),
+        InlineKeyboardButton("🏪 RESTORIA",      callback_data="cat_RESTORIA"),
     ],
     [
-        InlineKeyboardButton("🏪 Restoria", callback_data="cat_Restoria"),
-        InlineKeyboardButton("👤 Личное", callback_data="cat_Личное"),
+        InlineKeyboardButton("💡 Идеи",          callback_data="cat_Идеи"),
+        InlineKeyboardButton("📸 Instagram",     callback_data="cat_Идеи Instagram"),
+    ],
+    [
+        InlineKeyboardButton("🎵 TikTok",        callback_data="cat_Идеи TikTok"),
+        InlineKeyboardButton("🎬 YouTube",       callback_data="cat_Идеи YouTube"),
+    ],
+    [
+        InlineKeyboardButton("🤝 Коллаборации",  callback_data="cat_Коллаборации"),
+    ],
+    [
+        InlineKeyboardButton("✈️ Jetex",          callback_data="cat_Коллаборация Jetex"),
+        InlineKeyboardButton("💎 Venuum",         callback_data="cat_Коллаборация Venuum"),
     ],
 ])
 
@@ -195,7 +210,7 @@ async def handle_date_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 async def _finalize_task(query, context):
     text = context.user_data.get("pending_task", "")
     priority = context.user_data.get("pending_priority", 2)
-    project = context.user_data.get("pending_project", "VLAD BYKOV")
+    project = context.user_data.get("pending_project", "Модный дом")
     due = context.user_data.get("pending_due")
     due_time = context.user_data.get("pending_due_time")
 
@@ -506,7 +521,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title = shorten_task(full_text)
         meta = detect_task_meta(full_text)
         priority = meta.get("priority", 2)
-        category = meta.get("category", "VLAD BYKOV")
+        category = meta.get("category", "Модный дом")
         due = parse_due_date(full_text)
         due_time = parse_due_time(full_text)
 
@@ -542,7 +557,7 @@ async def handle_voice_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     text = context.user_data.get("pending_task", "")
     priority = context.user_data.get("pending_priority", 2)
-    category = context.user_data.get("pending_project", "VLAD BYKOV")
+    category = context.user_data.get("pending_project", "Модный дом")
     due = context.user_data.get("pending_due")
     due_time = context.user_data.get("pending_due_time")
 
