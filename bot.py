@@ -54,6 +54,8 @@ KEYBOARD = ReplyKeyboardMarkup(
 
 CANCEL_KEYBOARD = ReplyKeyboardMarkup([[KeyboardButton("❌ Отмена")]], resize_keyboard=True)
 
+_CANCEL_ROW = [InlineKeyboardButton("❌ Отмена", callback_data="cancel_task")]
+
 PRIORITY_KEYBOARD = InlineKeyboardMarkup([
     [
         InlineKeyboardButton("🔴 Срочно", callback_data="priority_4"),
@@ -63,6 +65,7 @@ PRIORITY_KEYBOARD = InlineKeyboardMarkup([
         InlineKeyboardButton("🟡 Обычно", callback_data="priority_2"),
         InlineKeyboardButton("⚪ Условно", callback_data="priority_1"),
     ],
+    _CANCEL_ROW,
 ])
 
 CATEGORY_KEYBOARD = InlineKeyboardMarkup([
@@ -85,6 +88,7 @@ CATEGORY_KEYBOARD = InlineKeyboardMarkup([
         InlineKeyboardButton("✈️ Jetex",          callback_data="cat_Коллаборация Jetex"),
         InlineKeyboardButton("💎 Venuum",         callback_data="cat_Коллаборация Venuum"),
     ],
+    _CANCEL_ROW,
 ])
 
 DATE_KEYBOARD = InlineKeyboardMarkup([
@@ -96,6 +100,7 @@ DATE_KEYBOARD = InlineKeyboardMarkup([
         InlineKeyboardButton("📅 Послезавтра", callback_data="date_after"),
         InlineKeyboardButton("⏭ Без срока", callback_data="date_none"),
     ],
+    _CANCEL_ROW,
 ])
 
 
@@ -205,6 +210,14 @@ async def handle_date_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data["pending_due"] = None
 
     await _finalize_task(query, context)
+
+
+async def handle_cancel_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data.clear()
+    await query.edit_message_text("Отменено.")
+    await query.message.reply_text("Главное меню:", reply_markup=KEYBOARD)
 
 
 async def _finalize_task(query, context):
@@ -654,6 +667,7 @@ async def main():
     app.add_handler(MessageHandler(filters.Regex("^📋 Список задач$"), btn_task_list))
     app.add_handler(MessageHandler(filters.Regex("^📊 По приоритету$"), btn_by_priority))
     app.add_handler(MessageHandler(filters.Regex("^🗂 По проектам$"), btn_by_project))
+    app.add_handler(CallbackQueryHandler(handle_cancel_task, pattern="^cancel_task$"))
     app.add_handler(CallbackQueryHandler(handle_voice_confirm, pattern="^voice_confirm$"))
     app.add_handler(CallbackQueryHandler(handle_voice_edit, pattern="^voice_edit$"))
     app.add_handler(CallbackQueryHandler(handle_priority_callback, pattern="^priority_"))
