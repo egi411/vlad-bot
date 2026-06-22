@@ -12,7 +12,7 @@ from telegram.ext import (
 
 from config import TELEGRAM_TOKEN
 import db
-from voice import transcribe_voice, parse_due_date, parse_due_time, detect_task_meta, shorten_task, format_due_date
+from voice import transcribe_voice, parse_due_date, parse_due_time, detect_task_meta, shorten_task, format_due_date, detect_voice_intent
 from reports import build_morning_report, build_evening_report
 
 logging.basicConfig(level=logging.INFO)
@@ -229,8 +229,6 @@ async def _finalize_task(query, context):
 
     db.create_task(content=text, priority=priority, project=project, sender="Влад", due=due, due_time=due_time)
 
-    if due_time:
-        _schedule_reminder(context.job_queue, text, due_time)
 
     e = PRIORITY_EMOJI[priority]
     cat = CATEGORY_DISPLAY.get(project, project)
@@ -260,7 +258,6 @@ def _due_label(task) -> str:
     parts = []
     if due:
         parts.append(format_due_date(due))
-    if due_time:
         parts.append(f"в {due_time}")
     return "  📅 " + " ".join(parts)
 
@@ -531,6 +528,71 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         full_text = transcribe_voice(tmp_path)
         os.unlink(tmp_path)
         await msg.edit_text("🤖 Анализирую...")
+
+        active_tasks = db.get_active_tasks()
+        intent_data = detect_voice_intent(full_text, active_tasks)
+        intent = intent_data["intent"]
+
+        transcript_preview = full_text[:120] + ("…" if len(full_text) > 120 else "")
+
+        if intent == "mark_done":
+            task_id = intent_data.get("task_id")
+            task = db.get_task(task_id) if task_id else None
+            if task:
+                context.user_data["voice_intent"] = "mark_done"
+                context.user_data["voice_task_id"] = task_id
+                confirm_kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Да, выполнено", callback_data=f"vintent_done_{task_id}"),
+                    InlineKeyboardButton("❌ Отмена", callback_data="vintent_cancel"),
+                ]])
+                await msg.edit_text(
+                    f"🎙 _{escape_md(transcript_preview)}_\n\n"
+                    f"Отметить задачу как выполненную?\n*{escape_md(task['content'])}*",
+                    parse_mode="Markdown",
+                    reply_markup=confirm_kb
+                )
+            else:
+                await msg.edit_text(
+                    f"🎙 _{escape_md(transcript_preview)}_\n\n"
+                    "❓ Не удалось найти задачу. Открой список задач и отметь вручную.",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("❌ Закрыть", callback_data="vintent_cancel")
+                    ]])
+                )
+            return
+
+        if intent == "add_comment":
+            task_id = intent_data.get("task_id")
+            task = db.get_task(task_id) if task_id else None
+            comment_text = intent_data.get("comment") or full_text
+            if task:
+                context.user_data["voice_intent"] = "add_comment"
+                context.user_data["voice_task_id"] = task_id
+                context.user_data["voice_comment"] = comment_text
+                confirm_kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Добавить", callback_data=f"vintent_comment_{task_id}"),
+                    InlineKeyboardButton("❌ Отмена", callback_data="vintent_cancel"),
+                ]])
+                await msg.edit_text(
+                    f"🎙 _{escape_md(transcript_preview)}_\n\n"
+                    f"Добавить комментарий к задаче?\n*{escape_md(task['content'])}*\n\n"
+                    f"💬 _{escape_md(comment_text)}_",
+                    parse_mode="Markdown",
+                    reply_markup=confirm_kb
+                )
+            else:
+                await msg.edit_text(
+                    f"🎙 _{escape_md(transcript_preview)}_\n\n"
+                    "❓ Не удалось найти задачу. Открой карточку задачи и добавь комментарий вручную.",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("❌ Закрыть", callback_data="vintent_cancel")
+                    ]])
+                )
+            return
+
+        # new_task — стандартный флоу
         title = shorten_task(full_text)
         meta = detect_task_meta(full_text)
         priority = meta.get("priority", 2)
@@ -550,8 +612,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         due_line = f"\n📅 {format_due_date(due)}" if due else ""
         time_line = f"\n🕐 в {due_time}" if due_time else ""
 
-        transcript_preview = full_text[:120] + ("…" if len(full_text) > 120 else "")
-
         await msg.edit_text(
             f"🎙 _{escape_md(transcript_preview)}_\n\n"
             f"📝 *{escape_md(title)}*\n"
@@ -562,7 +622,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Voice error: {e}")
-        await msg.edit_text("❌ Не удалось расшифровать голосовое.")
+        await msg.edit_text("❌ Не удалось обработать голосовое.")
 
 
 async def handle_voice_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -576,8 +636,6 @@ async def handle_voice_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
 
     db.create_task(content=text, priority=priority, project=category, sender="Влад", due=due, due_time=due_time)
 
-    if due_time:
-        _schedule_reminder(context.job_queue, text, due_time)
 
     e = PRIORITY_EMOJI[priority]
     cname = CATEGORY_DISPLAY.get(category, category)
@@ -598,6 +656,41 @@ async def handle_voice_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
         reply_markup=PRIORITY_KEYBOARD
     )
+
+
+# ── Голос: намерение выполнить / добавить комментарий ────────
+async def handle_voice_intent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data  # vintent_done_{id} | vintent_comment_{id} | vintent_cancel
+
+    if data == "vintent_cancel":
+        context.user_data.clear()
+        await query.edit_message_text("Отменено.")
+        await query.message.reply_text("Главное меню:", reply_markup=KEYBOARD)
+        return
+
+    if data.startswith("vintent_done_"):
+        task_id = int(data.replace("vintent_done_", ""))
+        db.mark_done(task_id)
+        task = db.get_task(task_id)
+        name = escape_md(task["content"]) if task else f"#{task_id}"
+        await query.edit_message_text(f"✅ Задача выполнена!\n*{name}*", parse_mode="Markdown")
+        await query.message.reply_text("Готово!", reply_markup=KEYBOARD)
+
+    elif data.startswith("vintent_comment_"):
+        task_id = int(data.replace("vintent_comment_", ""))
+        comment = context.user_data.get("voice_comment", "")
+        db.add_comment(task_id, "Влад", comment)
+        task = db.get_task(task_id)
+        name = escape_md(task["content"]) if task else f"#{task_id}"
+        await query.edit_message_text(
+            f"💬 Комментарий добавлен к задаче\n*{name}*\n\n_{escape_md(comment)}_",
+            parse_mode="Markdown"
+        )
+        await query.message.reply_text("Готово!", reply_markup=KEYBOARD)
+
+    context.user_data.clear()
 
 
 # ── Фото ──────────────────────────────────────────────────
@@ -625,29 +718,23 @@ async def send_evening_report(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=int(vlad_id), text=build_evening_report(), parse_mode="Markdown")
 
 
-async def send_task_reminder(context: ContextTypes.DEFAULT_TYPE):
-    data = context.job.data
+async def check_reminders(context: ContextTypes.DEFAULT_TYPE):
+    """Polling job: runs every 60s, fires any overdue reminders from DB."""
     vlad_id = db.get_setting("vlad_id")
-    if vlad_id:
-        await context.bot.send_message(
-            chat_id=int(vlad_id),
-            text=f"⏰ *Напоминание — через 1 час!*\n{escape_md(data['task'])} в *{data['due_time']}*",
-            parse_mode="Markdown"
-        )
-
-
-def _schedule_reminder(job_queue, task_name: str, due_time_str: str):
-    """Schedule a reminder 1 hour before the task's due_time."""
-    h, m = map(int, due_time_str.split(":"))
-    now = datetime.now()
-    task_dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
-    if task_dt <= now:
-        task_dt += timedelta(days=1)
-    reminder_dt = task_dt - timedelta(hours=1)
-    delay = (reminder_dt - now).total_seconds()
-    if delay > 0:
-        job_queue.run_once(send_task_reminder, delay, data={"task": task_name, "due_time": due_time_str})
-        logger.info(f"Reminder scheduled for {task_name!r} at {due_time_str} (in {delay:.0f}s)")
+    if not vlad_id:
+        return
+    pending = db.get_pending_reminders()
+    for task in pending:
+        try:
+            await context.bot.send_message(
+                chat_id=int(vlad_id),
+                text=f"⏰ *Напоминание — через 1 час!*\n{escape_md(task['content'])}"
+                     + (f" в *{task['due_time']}*" if task.get("due_time") else ""),
+                parse_mode="Markdown"
+            )
+            db.mark_reminder_sent(task["id"])
+        except Exception as e:
+            logger.error(f"Reminder send error task {task['id']}: {e}")
 
 
 # ── Запуск ────────────────────────────────────────────────
@@ -668,6 +755,7 @@ async def main():
     app.add_handler(MessageHandler(filters.Regex("^📊 По приоритету$"), btn_by_priority))
     app.add_handler(MessageHandler(filters.Regex("^🗂 По проектам$"), btn_by_project))
     app.add_handler(CallbackQueryHandler(handle_cancel_task, pattern="^cancel_task$"))
+    app.add_handler(CallbackQueryHandler(handle_voice_intent_callback, pattern="^vintent_"))
     app.add_handler(CallbackQueryHandler(handle_voice_confirm, pattern="^voice_confirm$"))
     app.add_handler(CallbackQueryHandler(handle_voice_edit, pattern="^voice_edit$"))
     app.add_handler(CallbackQueryHandler(handle_priority_callback, pattern="^priority_"))
@@ -685,6 +773,7 @@ async def main():
     msk = timezone(timedelta(hours=3))
     app.job_queue.run_daily(send_morning_report, time=time(9, 0, tzinfo=msk))
     app.job_queue.run_daily(send_evening_report, time=time(20, 0, tzinfo=msk))
+    app.job_queue.run_repeating(check_reminders, interval=60, first=10)
 
     logger.info("Бот запущен")
     async with app:

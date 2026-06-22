@@ -38,7 +38,6 @@ def build_evening_report() -> str:
     active = db.get_active_tasks()
     today = datetime.now().strftime("%Y-%m-%d")
 
-    waiting = [t for t in active if t.get("status") == "waiting"]
     overdue = [t for t in active if t.get("due") and t["due"] < today]
 
     lines = ["🌙 *Итоги дня*\n"]
@@ -50,17 +49,13 @@ def build_evening_report() -> str:
     else:
         lines.append("• —")
 
-    lines.append("\n⏳ *Ожидаем ответ:*")
-    if waiting:
-        for t in waiting[:5]:
-            lines.append(f"• {_esc(t['content'])}")
-    else:
-        lines.append("• —")
+    lines.append(f"\n📋 *Активных задач:* {len(active)}")
 
     lines.append("\n🔴 *Просрочено:*")
     if overdue:
         for t in overdue[:5]:
-            lines.append(f"• {_esc(t['content'])}")
+            due_label = f" ({format_due_date(t['due'])})" if t.get("due") else ""
+            lines.append(f"• {_esc(t['content'])}{due_label}")
     else:
         lines.append("• —")
 

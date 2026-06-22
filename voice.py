@@ -242,3 +242,59 @@ def parse_due_time(text: str) -> str | None:
             return t.strftime("%H:%M")
 
     return None
+
+
+def detect_voice_intent(text: str, active_tasks: list) -> dict:
+    """
+    Detect intent from voice transcription.
+    Returns:
+      {"intent": "new_task"}
+      {"intent": "mark_done", "task_id": int | None}
+      {"intent": "add_comment", "task_id": int | None, "comment": str}
+    """
+    client = _get_client()
+    tasks_json = json.dumps(
+        [{"id": t["id"], "content": t["content"]} for t in active_tasks[:30]],
+        ensure_ascii=False
+    )
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты анализируешь голосовую команду для системы задач дизайнера Влада.\n"
+                        "Определи намерение:\n"
+                        "- 'new_task': создать новую задачу (нет упоминания существующей)\n"
+                        "- 'mark_done': задача выполнена/готова/сделана\n"
+                        "- 'add_comment': добавить комментарий/заметку/обновление к задаче\n\n"
+                        "Если mark_done или add_comment — найди task_id из списка задач по смыслу.\n"
+                        "Ответь строго в JSON:\n"
+                        '{"intent": "...", "task_id": <число или null>, "comment": "<текст или null>"}'
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": f"Список задач:\n{tasks_json}\n\nГолосовая команда: {text}"
+                }
+            ],
+            max_tokens=80,
+            temperature=0,
+        )
+        raw = resp.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        result = json.loads(raw)
+        intent = result.get("intent", "new_task")
+        if intent not in ("new_task", "mark_done", "add_comment"):
+            intent = "new_task"
+        return {
+            "intent": intent,
+            "task_id": result.get("task_id"),
+            "comment": result.get("comment"),
+        }
+    except Exception:
+        return {"intent": "new_task", "task_id": None, "comment": None}

@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import psycopg2
 import psycopg2.extras
@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 MIGRATE_SQL = """
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS due_time TEXT;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reminder_at TIMESTAMP;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS reminder_sent BOOLEAN DEFAULT FALSE;
 """
 
 CREATE_SETTINGS_SQL = """
@@ -89,18 +91,34 @@ def init_db():
         _put(conn)
 
 
+def _compute_reminder_at(due: str | None, due_time: str | None):
+    """Compute reminder timestamp = due date + due_time - 1 hour. Returns datetime or None."""
+    if not due_time:
+        return None
+    try:
+        h, m = map(int, due_time.split(":"))
+        base_date = datetime.strptime(due, "%Y-%m-%d").date() if due else date.today()
+        task_dt = datetime.combine(base_date, datetime.min.time()).replace(hour=h, minute=m)
+        if task_dt <= datetime.now():
+            task_dt += timedelta(days=1)
+        return task_dt - timedelta(hours=1)
+    except Exception:
+        return None
+
+
 def create_task(content: str, priority: int, project: str, sender: str,
                 due: str | None = None, due_time: str | None = None) -> dict:
+    reminder_at = _compute_reminder_at(due, due_time)
     conn = _conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                INSERT INTO tasks (content, priority, project, sender, due, due_time)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING id, content, priority, project, status, sender, due, due_time, created_at
+                INSERT INTO tasks (content, priority, project, sender, due, due_time, reminder_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, content, priority, project, status, sender, due, due_time, reminder_at, created_at
                 """,
-                (content, priority, project, sender, due, due_time),
+                (content, priority, project, sender, due, due_time, reminder_at),
             )
             row = dict(cur.fetchone())
         conn.commit()
@@ -110,6 +128,42 @@ def create_task(content: str, priority: int, project: str, sender: str,
         logger.error(f"create_task error: {e}")
         conn.rollback()
         raise
+    finally:
+        _put(conn)
+
+
+def get_pending_reminders() -> list[dict]:
+    """Return tasks whose reminder_at has passed but reminder not yet sent."""
+    conn = _conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, content, due_time
+                FROM tasks
+                WHERE reminder_at IS NOT NULL
+                  AND reminder_at <= NOW()
+                  AND reminder_sent = FALSE
+                  AND status = 'active'
+                """
+            )
+            return [dict(r) for r in cur.fetchall()]
+    except Exception as e:
+        logger.error(f"get_pending_reminders error: {e}")
+        return []
+    finally:
+        _put(conn)
+
+
+def mark_reminder_sent(task_id: int):
+    conn = _conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE tasks SET reminder_sent=TRUE WHERE id=%s", (task_id,))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"mark_reminder_sent error: {e}")
+        conn.rollback()
     finally:
         _put(conn)
 
@@ -139,7 +193,7 @@ def get_active_tasks() -> list[dict]:
                 """
                 SELECT id, content, priority, project, status, sender, due, due_time, created_at
                 FROM tasks
-                WHERE status IN ('active', 'waiting')
+                WHERE status = 'active'
                 ORDER BY priority DESC, created_at ASC
                 """
             )
@@ -150,25 +204,6 @@ def get_active_tasks() -> list[dict]:
     finally:
         _put(conn)
 
-
-def get_waiting_tasks() -> list[dict]:
-    conn = _conn()
-    try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT id, content, priority, project, status, sender, due, due_time, created_at
-                FROM tasks
-                WHERE status = 'waiting'
-                ORDER BY priority DESC, created_at ASC
-                """
-            )
-            return [dict(r) for r in cur.fetchall()]
-    except Exception as e:
-        logger.error(f"get_waiting_tasks error: {e}")
-        return []
-    finally:
-        _put(conn)
 
 
 def mark_waiting(task_id: int):
